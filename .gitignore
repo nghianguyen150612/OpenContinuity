@@ -1,0 +1,6 @@
+/target/
+/.env
+*.pcap
+*.pcapng
+*.irk
+*.irkey

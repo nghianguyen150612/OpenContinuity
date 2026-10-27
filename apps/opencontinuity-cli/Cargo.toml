@@ -1,0 +1,13 @@
+[package]
+name = "opencontinuity-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "opencontinuity"
+path = "src/main.rs"
+
+[dependencies]
+opencontinuity-core = { path = "../../crates/opencontinuity-core" }
+serde_json.workspace = true
