@@ -33,12 +33,13 @@ Tests cover evidence-state serialization including UNKNOWN/BLOCKED, fixture pars
 
 | Item | Status |
 | --- | --- |
-| Branch push | Pending |
-| GitHub Actions run URL and conclusion | Pending branch push |
-| P002 pull request to `main` | Pending branch push |
+| Branch push | PASS: branch head `d9920df4ac667a5438355cd7a6ecd12dbeff4371` |
+| GitHub Actions push run | QUEUED: [run 40481064618](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40481064618), observed 2026-10-27 09:29 UTC |
+| GitHub Actions pull request run | QUEUED: [run 40481125793](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40481125793), observed 2026-10-27 09:29 UTC |
+| P002 pull request to `main` | OPEN: [PR #2](https://github.com/nghianguyen150612/OpenContinuity/pull/2), ready for human review; not merged |
 | Human review / merge | Not performed; merge is not automated |
 
-Update this section with the exact push commit, hosted Actions URL and terminal conclusion, and PR URL once GitHub has processed them. A queued or in-progress workflow is not a PASS.
+Both hosted runs were still QUEUED at the recorded observation time, so no hosted PASS or FAIL is claimed. Check the PR for their eventual conclusions; a queued or in-progress workflow is not a PASS.
 
 ## Acceptance checklist
 
@@ -50,5 +51,5 @@ Update this section with the exact push commit, hosted Actions URL and terminal 
 - [x] Existing P001 doctor and daemon CLI behavior regression-checked.
 - [x] Go/no-go decision identifies boundaries and unknowns.
 - [ ] Hosted CI run reaches a terminal conclusion.
-- [ ] P002 PR is open and ready for human review.
+- [x] P002 PR is open and ready for human review.
 - [ ] Human review and merge remain pending.
