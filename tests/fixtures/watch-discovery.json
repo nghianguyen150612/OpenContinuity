@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "observations": [
+    {
+      "observation_id": "fixture-watch-candidate",
+      "untrusted_name": "Example nearby device",
+      "rssi_dbm": -61,
+      "manufacturer_company_ids": [76]
+    }
+  ]
+}

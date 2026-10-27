@@ -21,11 +21,12 @@ cargo build --workspace
 cargo run -p opencontinuity-cli -- --help
 cargo run -p opencontinuity-cli -- doctor
 cargo run -p opencontinuity-cli -- doctor --json
+cargo run -p opencontinuity-cli -- research watch --fixture tests/fixtures/watch-discovery.json --json
 cargo run -p opencontinuityd -- --help
 cargo run -p opencontinuityd
 ```
 
-The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. P001 does not perform BLE scans, modify system authentication, install services, take over a radio, or write to devices.
+The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. The research command reads only a local sanitized JSON fixture; it does not access Bluetooth. This branch does not perform BLE scans, modify system authentication, install services, take over a radio, or write to devices.
 
 ## Architecture
 
