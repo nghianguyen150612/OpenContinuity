@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod research;
+
 /// The evidence-backed state of a capability or trust stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
