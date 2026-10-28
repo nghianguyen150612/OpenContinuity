@@ -1,6 +1,6 @@
 # P007 — Foreground watchOS BLE Central Client and Linux GATT Interoperability
 
-**Status:** STARTED / scope & evidence plan only; implementation and physical Watch tests NOT RUN.
+**Status:** Source implementation added; Swift tests, Apple compilation and physical Watch tests NOT RUN. See `docs/P007_VALIDATION.md`.
 **Branch:** `feat/p007-watchos-foreground-client`.
 **Base:** `main` at `3321799745fca35d35bc1051a41e2a8416a66382` (P006/P006A squash merge).
 **Reference:** Owned Apple Watch SE 2 + paired iPhone, and an owned Arch Linux/BlueZ host.
@@ -29,7 +29,7 @@ P006A guarantees reported disconnect signal handling *when received before reque
 
 ## Workstream 1 — Native watchOS client
 
-Create a clearly isolated `experiments/watchos/` project (or similarly documented path) containing:
+Create a clearly isolated `experiments/watchos/` app source tree and protocol Swift package containing:
 - Small SwiftUI foreground app with Start/Stop and explicit Connect/Disconnect; display research-only state, selected Linux host/peripheral, protocol version, synthetic exchange verdict and errors. No Approve Unlock or identity/security claims.
 - `CBCentralManager` delegate with retained lifecycle; scan only for experiment UUID after user action; bounded scan, connect and service discovery; limit to one chosen peripheral; handle off, unavailable, unauthorized, timeouts and app suspension.
 - `CBPeripheralDelegate` for characteristic discovery and read/write flow, verify UUIDs and read/write properties, serialize writes with `.withResponse`, wait for `didWriteValueFor`, and limit in-flight operations.

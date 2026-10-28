@@ -13,14 +13,14 @@ States describe the P006 provisional branch build. `unsupported` means no implem
 | P006 session/host qualification | experimental | Bounded per-client synthetic sessions, private D-Bus cleanup tests and read-only inventory; actual controller and Watch interoperability NOT RUN. |
 | Production Bluetooth adapter | unsupported | P001 adapter scaffolding remains incomplete; this isolated research CLI server does not complete it. |
 | Mock enrollment verification | supported | Separate in-memory `MockEnrollmentRecord` binds host/account/Watch identity and algorithm to the expected key. Endpoint key substitution, unknown/revoked enrollment and binding/algorithm mismatch fail closed in Rust tests. Not production enrollment/storage. |
-| watchOS companion app | blocked | No Apple SDK/Xcode/signing target in this Linux environment; no app source is claimed buildable and no Apple compilation or device run occurred. |
+| watchOS foreground research client | experimental source | SwiftUI/CoreBluetooth app and pure wire codec source exist under `experiments/watchos/`; no Apple compilation, signing, simulator, or physical Watch test is claimed. |
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
 | Apple Watch SE 2 Auto Unlock, native protocol | unsupported | P002 research found public third-party enrollment/STS support blocked. Trust stages are unknown; no OS unlock behavior. |
 | AirDrop via native AWDL | unsupported | No AWDL or AirDrop implementation. |
 | AirPods Pro 3 AAP/AACP and Settings | unsupported | No device protocol or UI implementation. |
 | AirPods automatic switching | unsupported | Not implemented. |
 | AirPlay, HomeKit, iCloud, remaining Continuity | unsupported | Not implemented. |
-| Device detection / nearby Bluetooth devices | unknown | No discovery or BLE scanning is performed by this branch. Fixture observations are synthetic/local input. |
+| Foreground Watch BLE discovery | experimental source | Scan is explicit and filtered to the P006 service; no real peripheral was available for validation. |
 | Watch direct BLE endpoint | blocked / unknown | Apple documents Watch central-to-peripheral communication and explicitly blocks Watch `CBPeripheralManager` advertising. Foreground central is a feasible test candidate; background/hands-free listener remains blocked. No physical test. See P003 matrices. |
 | Watch–iPhone relay endpoint | experimental | WatchConnectivity supports paired-app messaging with live reachability requirements and queued, non-immediate background delivery. No relay app or Linux transport implemented; phone never substitutes for Watch identity. |
 | Foreground Watch confirmation | experimental | Public Local Authentication wrist-detection policy (watchOS 9+) can accompany explicit foreground action. No Apple build or SE 2 test; no third-party biometric or Touch ID claim. |
