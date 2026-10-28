@@ -54,6 +54,7 @@ pub fn validate_options(adapter: &str, duration: u16, experimental: bool) -> Res
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use futures_lite::{FutureExt, StreamExt};
     use opencontinuity_core::gatt_wire::{
         ControlCommand, FrameAssembler, FrameProgress, MAX_ATT_MTU, MIN_ATT_MTU, WIRE_VERSION,
         WireError,
@@ -434,6 +435,14 @@ mod linux {
             }
         }
 
+        fn invalidate(&self, device: &str) -> Result<(), String> {
+            self.clients
+                .lock()
+                .map_err(|_| "GATT client state lock poisoned".to_owned())?
+                .remove(device);
+            Ok(())
+        }
+
         fn prune_devices(&self, connected: &HashMap<String, bool>) -> Result<(), String> {
             let mut clients = self
                 .clients
@@ -444,6 +453,366 @@ mod linux {
                 connected.get(device).copied().unwrap_or(false) && !session.expired(now)
             });
             Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CallKey {
+        sender: String,
+        serial: u32,
+    }
+
+    fn call_key(header: &zbus::message::Header<'_>) -> Option<CallKey> {
+        Some(CallKey {
+            sender: header.sender()?.to_string(),
+            serial: header.primary().serial_num().get(),
+        })
+    }
+
+    #[derive(Default)]
+    struct GateInner {
+        healthy: bool,
+        current: Option<CallKey>,
+        done: bool,
+        claimed: bool,
+        reason: Option<String>,
+    }
+
+    struct MonitorGate {
+        owner: String,
+        inner: Mutex<GateInner>,
+        changed: std::sync::Condvar,
+    }
+
+    impl MonitorGate {
+        fn new(owner: &str) -> Self {
+            Self {
+                owner: owner.to_owned(),
+                inner: Mutex::new(GateInner::default()),
+                changed: std::sync::Condvar::new(),
+            }
+        }
+
+        fn fail(&self, state: &GattState, reason: impl Into<String>) {
+            // Close the gate before clearing state: no later GATT operation can
+            // begin, even if the stream dies while an earlier operation runs.
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.healthy = false;
+                if inner.reason.is_none() {
+                    inner.reason = Some(reason.into());
+                }
+                self.changed.notify_all();
+            }
+            if let Ok(mut clients) = state.clients.lock() {
+                clients.clear();
+            }
+        }
+
+        fn with_live<T>(
+            &self,
+            operation: impl FnOnce() -> Result<T, BluezGattError>,
+        ) -> Result<T, BluezGattError> {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| BluezGattError::Failed("monitor gate poisoned".into()))?;
+            if !inner.healthy {
+                return Err(BluezGattError::Failed(
+                    "disconnect monitor unavailable".into(),
+                ));
+            }
+            // Keep the gate locked until the state operation is finished, so a
+            // concurrent failure cannot clear state before an admitted call uses it.
+            let result = operation();
+            drop(inner);
+            result
+        }
+
+        fn healthy(&self) -> Result<(), String> {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| "monitor gate poisoned".to_owned())?;
+            if inner.healthy {
+                Ok(())
+            } else {
+                Err(inner
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "monitor stopped".into()))
+            }
+        }
+
+        async fn begin<'a>(
+            &'a self,
+            header: &zbus::message::Header<'_>,
+            state: &GattState,
+        ) -> Result<CallPermit<'a>, BluezGattError> {
+            let key = call_key(header)
+                .ok_or_else(|| BluezGattError::Failed("missing method call identity".into()))?;
+            if key.sender != self.owner {
+                return Err(BluezGattError::NotAuthorized(
+                    "only the registered BlueZ owner may invoke GATT methods".into(),
+                ));
+            }
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                {
+                    let mut inner = self
+                        .inner
+                        .lock()
+                        .map_err(|_| BluezGattError::Failed("monitor gate poisoned".into()))?;
+                    if !inner.healthy {
+                        return Err(BluezGattError::Failed(
+                            "disconnect monitor unavailable".into(),
+                        ));
+                    }
+                    if inner.current.as_ref() == Some(&key) && !inner.claimed {
+                        inner.claimed = true;
+                        return Ok(CallPermit { gate: self });
+                    }
+                }
+                if Instant::now() >= deadline {
+                    self.fail(state, "disconnect monitor did not order the request");
+                    return Err(BluezGattError::Failed(
+                        "disconnect monitor did not order the request".into(),
+                    ));
+                }
+                // Do not block zbus's executor while an earlier handler awaits its turn.
+                async_io::Timer::after(Duration::from_millis(2)).await;
+            }
+        }
+
+        fn order_call(&self, key: CallKey) -> Result<(), String> {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "monitor gate poisoned".to_owned())?;
+            if !inner.healthy {
+                return Err("monitor stopped".into());
+            }
+            inner.current = Some(key);
+            inner.done = false;
+            inner.claimed = false;
+            self.changed.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while inner.healthy && !inner.done {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("GATT call did not finish within monitor deadline".into());
+                }
+                let (next, _) = self
+                    .changed
+                    .wait_timeout(inner, remaining)
+                    .map_err(|_| "monitor gate poisoned".to_owned())?;
+                inner = next;
+            }
+            inner.current = None;
+            if inner.healthy {
+                Ok(())
+            } else {
+                Err("monitor stopped".into())
+            }
+        }
+    }
+
+    struct CallPermit<'a> {
+        gate: &'a MonitorGate,
+    }
+    impl Drop for CallPermit<'_> {
+        fn drop(&mut self) {
+            if let Ok(mut inner) = self.gate.inner.lock() {
+                inner.done = true;
+                self.gate.changed.notify_all();
+            }
+        }
+    }
+
+    struct SignalMonitor {
+        gate: Arc<MonitorGate>,
+        state: Arc<GattState>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl SignalMonitor {
+        fn start(
+            connection: &Connection,
+            owner: &str,
+            adapter_path: &str,
+            app_path: &str,
+            state: Arc<GattState>,
+        ) -> Result<Self, String> {
+            // The unfiltered stream includes both signals and addressed method calls,
+            // in the same receive order. Install all bus matches before snapshot.
+            let mut messages = zbus::blocking::MessageIterator::from(connection).into_inner();
+            let bus = Proxy::new(
+                connection,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+            )
+            .map_err(|e| e.to_string())?;
+            let rules = [
+                format!("type='signal',sender='{owner}',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path_namespace='{adapter_path}'"),
+                format!("type='signal',sender='{owner}',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesRemoved',path='/'"),
+                "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.bluez'".to_owned(),
+            ];
+            for rule in rules {
+                bus.call::<_, _, ()>("AddMatch", &(rule,))
+                    .map_err(|e| format!("signal subscription failed: {e}"))?;
+            }
+            let gate = Arc::new(MonitorGate::new(owner));
+            gate.inner
+                .lock()
+                .map_err(|_| "monitor gate poisoned".to_owned())?
+                .healthy = true;
+            let worker_gate = gate.clone();
+            let worker_state = state.clone();
+            let owner = owner.to_owned();
+            let adapter_path = adapter_path.to_owned();
+            let app_path = app_path.to_owned();
+            let thread = thread::Builder::new()
+                .name("bluez-session-monitor".into())
+                .spawn(move || {
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                        || -> Result<(), String> {
+                            loop {
+                                let event = futures_lite::future::block_on(async {
+                                    async { Some(messages.next().await) }
+                                        .or(async {
+                                            async_io::Timer::after(Duration::from_millis(100))
+                                                .await;
+                                            None
+                                        })
+                                        .await
+                                });
+                                if worker_gate.healthy().is_err() {
+                                    return Ok(());
+                                }
+                                let Some(event) = event else {
+                                    continue;
+                                };
+                                let message = event
+                                    .ok_or_else(|| "D-Bus monitor stream ended".to_owned())?
+                                    .map_err(|e| format!("D-Bus monitor stream failed: {e}"))?;
+                                let header = message.header();
+                                let path = header.path().map(|p| p.as_str()).unwrap_or("");
+                                let interface =
+                                    header.interface().map(|i| i.as_str()).unwrap_or("");
+                                let member = header.member().map(|m| m.as_str()).unwrap_or("");
+                                if header.message_type() == zbus::message::Type::MethodCall
+                                    && path.starts_with(&format!("{app_path}/service0/char"))
+                                    && interface == "org.bluez.GattCharacteristic1"
+                                    && matches!(member, "ReadValue" | "WriteValue")
+                                {
+                                    let key = call_key(&header)
+                                        .ok_or_else(|| "GATT call without sender".to_owned())?;
+                                    if key.sender == owner {
+                                        worker_gate.order_call(key)?;
+                                    }
+                                } else if header.message_type() == zbus::message::Type::Signal {
+                                    let sender = header.sender().map(|s| s.as_str()).unwrap_or("");
+                                    if sender == owner
+                                        && interface == "org.freedesktop.DBus.Properties"
+                                        && member == "PropertiesChanged"
+                                        && (path == adapter_path
+                                            || path.starts_with(&format!("{adapter_path}/")))
+                                    {
+                                        let (name, changed, invalidated): (
+                                            String,
+                                            HashMap<String, OwnedValue>,
+                                            Vec<String>,
+                                        ) = message.body().deserialize().map_err(|e| {
+                                            format!("malformed PropertiesChanged: {e}")
+                                        })?;
+                                        if name == ADAPTER && path == adapter_path {
+                                            if invalidated.iter().any(|s| s == "Powered") {
+                                                return Err(
+                                                    "adapter power state invalidated".into()
+                                                );
+                                            }
+                                            if let Some(value) = changed.get("Powered") {
+                                                if !bool::try_from(value.clone()).map_err(|_| {
+                                                    "invalid Powered property".to_owned()
+                                                })? {
+                                                    return Err("adapter powered off".into());
+                                                }
+                                            }
+                                        }
+                                        if name == "org.bluez.Device1" && path != adapter_path {
+                                            if invalidated.iter().any(|s| s == "Connected") {
+                                                worker_state.invalidate(path)?;
+                                            }
+                                            if let Some(value) = changed.get("Connected") {
+                                                if !bool::try_from(value.clone()).map_err(|_| {
+                                                    "invalid Connected property".to_owned()
+                                                })? {
+                                                    worker_state.invalidate(path)?;
+                                                }
+                                            }
+                                        }
+                                    } else if sender == owner
+                                        && interface == "org.freedesktop.DBus.ObjectManager"
+                                        && member == "InterfacesRemoved"
+                                    {
+                                        let (removed, interfaces): (OwnedObjectPath, Vec<String>) =
+                                            message.body().deserialize().map_err(|e| {
+                                                format!("malformed InterfacesRemoved: {e}")
+                                            })?;
+                                        let removed = removed.as_str();
+                                        if removed == adapter_path
+                                            && interfaces.iter().any(|i| {
+                                                matches!(
+                                                    i.as_str(),
+                                                    ADAPTER | GATT_MANAGER | ADVERTISING_MANAGER
+                                                )
+                                            })
+                                        {
+                                            return Err("adapter or manager removed".into());
+                                        }
+                                        if removed.starts_with(&format!("{adapter_path}/"))
+                                            && interfaces.iter().any(|i| i == "org.bluez.Device1")
+                                        {
+                                            worker_state.invalidate(removed)?;
+                                        }
+                                    } else if interface == "org.freedesktop.DBus"
+                                        && member == "NameOwnerChanged"
+                                        && sender == "org.freedesktop.DBus"
+                                    {
+                                        let (name, old, new): (String, String, String) =
+                                            message.body().deserialize().map_err(|e| {
+                                                format!("malformed NameOwnerChanged: {e}")
+                                            })?;
+                                        if name == BLUEZ && old == owner && new != owner {
+                                            return Err("BlueZ owner changed".into());
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    ));
+                    let reason = match outcome {
+                        Ok(Ok(())) => "monitor stopped".into(),
+                        Ok(Err(error)) => error,
+                        Err(_) => "monitor thread panicked".into(),
+                    };
+                    worker_gate.fail(&worker_state, reason);
+                })
+                .map_err(|e| format!("could not start signal monitor: {e}"))?;
+            Ok(Self {
+                gate,
+                state,
+                thread: Some(thread),
+            })
+        }
+    }
+
+    impl Drop for SignalMonitor {
+        fn drop(&mut self) {
+            self.gate.fail(&self.state, "monitor stopping");
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
         }
     }
 
@@ -487,6 +856,7 @@ mod linux {
         flags: Vec<String>,
         kind: CharacteristicKind,
         state: Arc<GattState>,
+        gate: Arc<MonitorGate>,
     }
 
     #[zbus::interface(name = "org.bluez.GattCharacteristic1")]
@@ -506,20 +876,25 @@ mod linux {
             self.flags.clone()
         }
 
-        fn read_value(
+        async fn read_value(
             &self,
             options: HashMap<String, OwnedValue>,
+            #[zbus(header)] header: zbus::message::Header<'_>,
         ) -> Result<Vec<u8>, BluezGattError> {
+            let _permit = self.gate.begin(&header, &self.state).await?;
             let device = option_device(&options)?;
             let (offset, mtu) = read_options(&options)?;
-            self.state.client_value(&device, self.kind, offset, mtu)
+            self.gate
+                .with_live(|| self.state.client_value(&device, self.kind, offset, mtu))
         }
 
-        fn write_value(
+        async fn write_value(
             &self,
             value: Vec<u8>,
             options: HashMap<String, OwnedValue>,
+            #[zbus(header)] header: zbus::message::Header<'_>,
         ) -> Result<(), BluezGattError> {
+            let _permit = self.gate.begin(&header, &self.state).await?;
             let device = option_device(&options)?;
             let (offset, mtu) = read_options(&options)?;
             if offset != 0 || value.len() > mtu - 3 {
@@ -546,13 +921,13 @@ mod linux {
                     ));
                 }
             }
-            match self.kind {
+            self.gate.with_live(|| match self.kind {
                 CharacteristicKind::Exchange => self.state.write_exchange(&device, &value, mtu),
                 CharacteristicKind::Control => self.state.write_control(&device, &value),
                 _ => Err(BluezGattError::NotPermitted(
                     "characteristic is read-only".into(),
                 )),
-            }
+            })
         }
     }
 
@@ -578,8 +953,11 @@ mod linux {
         fn release(&self) {}
     }
 
-    fn managed_objects(connection: &Connection) -> Result<zbus::fdo::ManagedObjects, zbus::Error> {
-        let proxy = Proxy::new(connection, BLUEZ, "/", OM)?;
+    fn managed_objects(
+        connection: &Connection,
+        owner: &str,
+    ) -> Result<zbus::fdo::ManagedObjects, zbus::Error> {
+        let proxy = Proxy::new(connection, owner, "/", OM)?;
         proxy.call("GetManagedObjects", &())
     }
 
@@ -831,7 +1209,44 @@ mod linux {
                 format!("BlueZ owner unavailable: {error}"),
             )
         })?;
-        let objects = managed_objects(&connection).map_err(|error| {
+        let adapter_path = format!("/org/bluez/{adapter}");
+        let nonce = random_bytes::<8>().map_err(|error| {
+            err_report(
+                adapter,
+                duration,
+                "preflight",
+                format!("OS random source unavailable: {error}"),
+            )
+        })?;
+        let mut token = String::with_capacity(16);
+        for byte in nonce {
+            use std::fmt::Write as _;
+            write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        let app_path = format!("/org/opencontinuity/gatt_{token}");
+        let ad_path = format!("/org/opencontinuity/advertisement_{token}");
+        let service_path = format!("{app_path}/service0");
+        let state = Arc::new(GattState::default());
+        let monitor =
+            SignalMonitor::start(&connection, &owner, &adapter_path, &app_path, state.clone())
+                .map_err(|error| err_report(adapter, duration, "preflight", error))?;
+        let current_owner = bluez_owner(&connection).map_err(|error| {
+            err_report(
+                adapter,
+                duration,
+                "preflight",
+                format!("BlueZ owner unavailable after subscription: {error}"),
+            )
+        })?;
+        if current_owner != owner {
+            return Err(err_report(
+                adapter,
+                duration,
+                "preflight",
+                "BlueZ owner changed during subscription",
+            ));
+        }
+        let objects = managed_objects(&connection, &owner).map_err(|error| {
             err_report(
                 adapter,
                 duration,
@@ -839,7 +1254,10 @@ mod linux {
                 format!("BlueZ discovery {}: {error}", classify_dbus_error(&error)),
             )
         })?;
-        let adapter_path = format!("/org/bluez/{adapter}");
+        monitor
+            .gate
+            .healthy()
+            .map_err(|error| err_report(adapter, duration, "preflight", error))?;
         if !objects
             .contains_key(&ObjectPath::try_from(adapter_path.as_str()).expect("valid adapter path"))
         {
@@ -877,23 +1295,6 @@ mod linux {
         let supported_instances = manager_capability(&objects, &adapter_path, "SupportedInstances");
         let active_instances = manager_capability(&objects, &adapter_path, "ActiveInstances");
 
-        let nonce = random_bytes::<8>().map_err(|error| {
-            err_report(
-                adapter,
-                duration,
-                "preflight",
-                format!("OS random source unavailable: {error}"),
-            )
-        })?;
-        let mut token = String::with_capacity(16);
-        for byte in nonce {
-            use std::fmt::Write as _;
-            write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
-        }
-        let app_path = format!("/org/opencontinuity/gatt_{token}");
-        let ad_path = format!("/org/opencontinuity/advertisement_{token}");
-        let service_path = format!("{app_path}/service0");
-        let state = Arc::new(GattState::default());
         let specs = [
             (
                 "char0",
@@ -971,6 +1372,7 @@ mod linux {
                         flags: flags.clone(),
                         kind: *kind,
                         state: state.clone(),
+                        gate: monitor.gate.clone(),
                     },
                 )
                 .map_err(|error| {
@@ -1022,6 +1424,10 @@ mod linux {
                 format!("{}: {error}", classify_dbus_error(&error)),
             )
         })?;
+        monitor
+            .gate
+            .healthy()
+            .map_err(|error| err_report(adapter, duration, "preflight", error))?;
         if let Err(error) = manager.call::<_, _, ()>("RegisterApplication", &(app_object, options))
         {
             // A timed-out call may have registered despite its missing reply.
@@ -1043,6 +1449,19 @@ mod linux {
             return Err(failure);
         }
         registration.app_registered = true;
+        if let Err(error) = monitor.gate.healthy() {
+            let cleanup = registration.cleanup();
+            let mut failure = err_report(
+                adapter,
+                duration,
+                "registering_application",
+                format!("disconnect monitor failed: {error}"),
+            );
+            failure.report.application_registration_succeeded = true;
+            failure.report.application_registered = registration.app_registered;
+            failure.report.cleanup_errors = cleanup;
+            return Err(failure);
+        }
 
         if let Err(error) = call_manager(
             &connection,
@@ -1077,6 +1496,14 @@ mod linux {
         let deadline = start + Duration::from_secs(duration as u64);
         let mut last_probe = Instant::now();
         let active_result: Result<&'static str, ExperimentError> = (|| loop {
+            monitor.gate.healthy().map_err(|error| {
+                err_report(
+                    adapter,
+                    duration,
+                    "active",
+                    format!("disconnect monitor failed: {error}"),
+                )
+            })?;
             if terminate.load(std::sync::atomic::Ordering::Relaxed) {
                 break Ok("termination_signal");
             }
@@ -1100,7 +1527,7 @@ mod linux {
                         "BlueZ service restarted",
                     ));
                 }
-                let current = managed_objects(&connection).map_err(|error| {
+                let current = managed_objects(&connection, &owner).map_err(|error| {
                     err_report(
                         adapter,
                         duration,
@@ -1356,6 +1783,26 @@ mod linux {
                 .last_activity = Instant::now() - IDLE_TIMEOUT - Duration::from_secs(1);
             challenge(&state, "/org/bluez/hci0/dev_extra");
             assert_eq!(state.clients.lock().unwrap().len(), MAX_CLIENTS);
+        }
+
+        #[test]
+        fn monitor_failure_closes_gate_before_clearing_sessions() {
+            let state = GattState::default();
+            let gate = MonitorGate::new(":1.1");
+            gate.inner.lock().unwrap().healthy = true;
+            challenge(&state, "/org/bluez/hci0/dev_01");
+            gate.fail(&state, "test failure");
+            assert!(state.clients.lock().unwrap().is_empty());
+            assert!(
+                gate.with_live(|| state.client_value(
+                    "/org/bluez/hci0/dev_01",
+                    CharacteristicKind::Challenge,
+                    0,
+                    23
+                ))
+                .is_err()
+            );
+            assert!(state.clients.lock().unwrap().is_empty());
         }
 
         #[test]

@@ -18,3 +18,5 @@ signal-hook.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
+async-io = "2"
+futures-lite = "2"
