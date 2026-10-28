@@ -116,3 +116,27 @@ fn watch_endpoint_command_rejects_unknown_fixture_fields() {
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("malformed"));
 }
+
+#[test]
+fn watch_ble_capabilities_command_is_read_only_and_never_authorizes() {
+    let result = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args(["research", "watch-ble", "--capabilities", "--json"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["source"], "bluez_adapter_capability_discovery");
+    assert_eq!(report["mock_simulation"], false);
+    assert_eq!(
+        report["bluez_capability_discovery"],
+        "attempted_but_unavailable"
+    );
+    assert_eq!(report["experimental_gatt_transport"], "not_implemented");
+    assert_eq!(
+        report["controller_le_peripheral_capability"],
+        "unknown_no_adapter_inspected"
+    );
+    assert_eq!(report["hardware_watch_observations"], "not_run");
+    assert_eq!(report["authentication_test_outcome"], "not_run");
+    assert_eq!(report["authorization"], "never_evaluated");
+}

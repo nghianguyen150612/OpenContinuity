@@ -26,6 +26,12 @@ P003 adds only portable, bounded mock contracts and a deterministic Ed25519 test
 
 For a future separately enrolled endpoint, trust must bind a Watch key to one Linux host, account, session and action. The iPhone is an untrusted relay and cannot forge a Watch signature. WatchConnectivity reachability is transport state only; queued transfers can arrive too late. A signed user approval plus Local Authentication does not prove distance: BLE/IP wormholes remain possible, and RSSI or latency is not secure proximity evidence. Stolen Watch, compromised host, key custody, secure enrollment, crash-safe replay storage and key revocation are unresolved before any unlock design.
 
+## P004 exposure
+
+P004 models an explicitly separate in-memory test enrollment record and verifies mock responses against its enrolled public key. Unknown, revoked, inactive, wrong-algorithm, wrong-binding, invalid-signature and substituted-key cases reject. The record and Ed25519 keys are deterministic test artifacts, not secure enrollment or production storage. The CLI `watch-ble --capabilities` path reads BlueZ object information only; it does not advertise, register GATT, pair, or alter adapter state. This host has no BlueZ system bus or controller; no Watch app or Apple hardware was available.
+
+P004 does not authenticate Linux to the Watch. A malicious GATT peripheral could attempt to prompt for approval; a production Watch app must verify an enrolled host signature before showing host/action consent. P004 documents this mutual-authentication boundary but has not implemented it. Approval is neither wearer proof nor distance proof. Do not use this prototype for login, PAM, lock-screen or privileged decisions.
+
 ## Controls for future work
 
 Keep protocols in portable code and hardware/system access behind narrow adapters. Validate all untrusted frames and lengths. Redact secrets and captures. Use explicit user consent for pairing and device writes. Keep tests deterministic and sanitized. Review least privilege and license compatibility before adding dependencies. No feature may modify PAM, sudoers, authentication configuration, Bluetooth global identity, Wi-Fi drivers, kernel modules or lock-screen security without a separately designed and reviewed milestone; P001 must not do so.

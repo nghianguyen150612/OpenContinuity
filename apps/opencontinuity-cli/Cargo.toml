@@ -10,4 +10,5 @@ path = "src/main.rs"
 
 [dependencies]
 opencontinuity-core = { path = "../../crates/opencontinuity-core" }
+serde.workspace = true
 serde_json.workspace = true
