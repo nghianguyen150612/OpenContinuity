@@ -28,9 +28,15 @@ For a future separately enrolled endpoint, trust must bind a Watch key to one Li
 
 ## P004 exposure
 
-P004 models an explicitly separate in-memory test enrollment record and verifies mock responses against its enrolled public key. Unknown, revoked, inactive, wrong-algorithm, wrong-binding, invalid-signature and substituted-key cases reject. The record and Ed25519 keys are deterministic test artifacts, not secure enrollment or production storage. The CLI `watch-ble --capabilities` path reads BlueZ object information only; it does not advertise, register GATT, pair, or alter adapter state. This host has no BlueZ system bus or controller; no Watch app or Apple hardware was available.
+P004 models an explicitly separate in-memory test enrollment record and verifies mock responses against its enrolled public key. Unknown, revoked, inactive, wrong-algorithm, wrong-binding, invalid-signature and substituted-key cases reject. The record and Ed25519 keys are deterministic test artifacts, not secure enrollment or production storage. The P004 `watch-ble --capabilities` path only read BlueZ object information; at that point there was no GATT registration, pairing, or adapter state change. P004 host observations are recorded in its validation file.
 
 P004 does not authenticate Linux to the Watch. A malicious GATT peripheral could attempt to prompt for approval; a production Watch app must verify an enrolled host signature before showing host/action consent. P004 documents this mutual-authentication boundary but has not implemented it. Approval is neither wearer proof nor distance proof. Do not use this prototype for login, PAM, lock-screen or privileged decisions.
+
+## P005 experimental transport exposure
+
+P005’s opt-in CLI exports a temporary custom GATT service and LE advertisement. A nearby party can observe the service UUID/name and any active client can send malformed or oversized writes; per-client framing, session checks, 1024-byte total bounds and timeout/disconnect cleanup limit the experiment. Random challenge/session values come from the OS random source. Advertisement and application registration are owned by this process and are unregistered in reverse order. No adapter settings or pairing state are changed. D-Bus denial fails visibly; no policy is bypassed.
+
+The data and digest response are synthetic transport test values. They do not identify a Watch, validate enrollment, prove proximity, or authorize the operating system. BLE discovery and connection are not identity or authentication. A future Watch app must verify an independently enrolled Linux host identity before presenting any prompt; a future signature would still not prevent a relay or prove distance. No production Bluetooth adapter, Qt6/QML Settings app, Apple client, PAM, polkit, login manager, or unlock code is added. Real BlueZ and Apple hardware behavior remain unverified here.
 
 ## Controls for future work
 

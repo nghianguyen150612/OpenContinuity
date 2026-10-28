@@ -1,6 +1,6 @@
 # Feature Matrix
 
-States describe this P004 branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
+States describe the P005 branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
 
 | Area | State | Evidence / scope |
 | --- | --- | --- |
@@ -8,8 +8,9 @@ States describe this P004 branch build. `unsupported` means no implementation is
 | CLI help, version, doctor | supported | Implemented and tested; doctor remains static and performs no host scan. |
 | Read-only protocol research fixture report | supported | `opencontinuity research watch --fixture <path> [--json]` validates sanitized offline metadata through a deterministic mock. No Bluetooth access, pairing, authentication, or authorization. |
 | Watch endpoint research simulation | supported | `opencontinuity research watch-endpoint --fixture <path> [--json]` runs deterministic Ed25519 mock challenge-response with bounded/versioned messages. Simulation only; report says so and authorization is always `never_evaluated`. |
-| BlueZ capability discovery | experimental | `opencontinuity research watch-ble --capabilities [--json]` read-only inspects BlueZ D-Bus object/interface availability when the system bus and BlueZ exist. Does not register, advertise, pair, or connect. |
-| Native Bluetooth/BlueZ GATT peripheral | unsupported | No GATT object server or advertisement registration implementation; no controller present/validated in this environment. |
+| BlueZ capability discovery | experimental | `opencontinuity research watch-ble --capabilities [--json]` remains read-only. Runtime manager interface absence is unsupported, D-Bus denial is blocked, missing evidence is unknown, and controller radio capability is not tested. |
+| Experimental Linux BlueZ GATT transport | experimental | Opt-in, 1–300 second CLI server exports real zbus object interfaces, registers an application and advertisement, handles bounded synthetic exchange, and cleans up owned registrations. Compiled and unit/mock tested; no live BlueZ registration or radio validation here. |
+| Production Bluetooth adapter | unsupported | P001 adapter scaffolding remains incomplete; this isolated research CLI server does not complete it. |
 | Mock enrollment verification | supported | Separate in-memory `MockEnrollmentRecord` binds host/account/Watch identity and algorithm to the expected key. Endpoint key substitution, unknown/revoked enrollment and binding/algorithm mismatch fail closed in Rust tests. Not production enrollment/storage. |
 | watchOS companion app | blocked | No Apple SDK/Xcode/signing target in this Linux environment; no app source is claimed buildable and no Apple compilation or device run occurred. |
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
@@ -24,6 +25,6 @@ States describe this P004 branch build. `unsupported` means no implementation is
 | Foreground Watch confirmation | experimental | Public Local Authentication wrist-detection policy (watchOS 9+) can accompany explicit foreground action. No Apple build or SE 2 test; no third-party biometric or Touch ID claim. |
 | Apple Watch Auto Unlock feasibility | blocked / unknown | Native Linux interoperation remains blocked on a public third-party enrollment/STS endpoint; undocumented feasibility and SE 2-specific behavior remain unknown. A separate foreground confirmation protocol is not native Auto Unlock and remains unimplemented. |
 | Device identity, cryptographic authentication, freshness, proximity, readiness | unknown | No trust protocol or assessment exists. Nearby signals never imply authorization. |
-| Qt 6/QML Settings UI | unsupported | Planned; not present in P001 or this branch. |
+| Qt 6/QML Settings UI | unsupported | P001 Settings framework remains absent; a GATT research command does not complete the UI. |
 
 Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No Apple communication or production authentication feature is implemented.
