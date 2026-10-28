@@ -44,3 +44,7 @@ There is no telemetry. See [Security](SECURITY.md), [Contributing](CONTRIBUTING.
 ## License
 
 OpenContinuity is MIT-licensed, as established by the repository's original [LICENSE](LICENSE). That license does not grant rights to third-party source, protocol specifications, trademarks, keys, or media. GPLv3 dependencies can impose source and licensing obligations on combined distributions; evaluate every dependency and linking boundary before adoption. See the upstream manifest.
+
+### P006 provisional BlueZ qualification
+
+Run `scripts/qualify-bluez-host.sh` for read-only host inventory; see [host qualification](docs/research/P006_BLUEZ_HOST_QUALIFICATION.md) before any explicitly opted-in, time-bounded GATT trial. The [Watch foreground client contract](docs/research/P006_WATCH_CLIENT_CONTRACT.md) is a specification, not a compiled or device-tested app. BlueZ controller and Watch tests are NOT RUN in the development environment. The synthetic transport does not authenticate or authorize. P006 continues the provisional BLE research track; the missing original Foundation/Settings roadmap, production adapter and Qt6/QML framework remain unresolved.

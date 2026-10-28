@@ -1,6 +1,6 @@
 # Feature Matrix
 
-States describe the P005 branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
+States describe the P006 provisional branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
 
 | Area | State | Evidence / scope |
 | --- | --- | --- |
@@ -10,6 +10,7 @@ States describe the P005 branch build. `unsupported` means no implementation is 
 | Watch endpoint research simulation | supported | `opencontinuity research watch-endpoint --fixture <path> [--json]` runs deterministic Ed25519 mock challenge-response with bounded/versioned messages. Simulation only; report says so and authorization is always `never_evaluated`. |
 | BlueZ capability discovery | experimental | `opencontinuity research watch-ble --capabilities [--json]` remains read-only. Runtime manager interface absence is unsupported, D-Bus denial is blocked, missing evidence is unknown, and controller radio capability is not tested. |
 | Experimental Linux BlueZ GATT transport | experimental | Opt-in, 1–300 second CLI server exports real zbus object interfaces, registers an application and advertisement, handles bounded synthetic exchange, and cleans up owned registrations. Compiled and unit/mock tested; no live BlueZ registration or radio validation here. |
+| P006 session/host qualification | experimental | Bounded per-client synthetic sessions, private D-Bus cleanup tests and read-only inventory; actual controller and Watch interoperability NOT RUN. |
 | Production Bluetooth adapter | unsupported | P001 adapter scaffolding remains incomplete; this isolated research CLI server does not complete it. |
 | Mock enrollment verification | supported | Separate in-memory `MockEnrollmentRecord` binds host/account/Watch identity and algorithm to the expected key. Endpoint key substitution, unknown/revoked enrollment and binding/algorithm mismatch fail closed in Rust tests. Not production enrollment/storage. |
 | watchOS companion app | blocked | No Apple SDK/Xcode/signing target in this Linux environment; no app source is claimed buildable and no Apple compilation or device run occurred. |

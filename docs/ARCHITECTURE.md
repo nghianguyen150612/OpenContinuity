@@ -39,3 +39,7 @@ These are planned boundaries, not P001 placeholder crates. Portable domain decis
 ## Doctor contract
 
 `opencontinuity doctor --json` emits `DoctorReport` with `schema_version`, `project`, `version`, `capabilities`, and `watch_auto_unlock_trust`. It reports protocol features as unsupported because no implementation exists. It does not inspect Bluetooth or infer host readiness. The trust stages remain unknown. Consumers should reject unknown schema versions and treat trust as fail-closed.
+
+## P006 provisional transport hardening
+
+The research GATT server now has per-client phase-based result ownership, bounded sessions and method calls, explicit cleanup reporting, and a read-only host qualification script. See [session hardening](research/P006_GATT_SESSION_HARDENING.md). Device paths and polling are not authentication or a guaranteed disconnect event stream. Real BlueZ and Watch behavior remain NOT RUN; the production adapter and Qt6/QML Settings framework remain absent. Reports retain `authorization: never_evaluated`.

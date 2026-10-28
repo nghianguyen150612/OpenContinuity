@@ -41,3 +41,7 @@ The data and digest response are synthetic transport test values. They do not id
 ## Controls for future work
 
 Keep protocols in portable code and hardware/system access behind narrow adapters. Validate all untrusted frames and lengths. Redact secrets and captures. Use explicit user consent for pairing and device writes. Keep tests deterministic and sanitized. Review least privilege and license compatibility before adding dependencies. No feature may modify PAM, sudoers, authentication configuration, Bluetooth global identity, Wi-Fi drivers, kernel modules or lock-screen security without a separately designed and reviewed milestone; P001 must not do so.
+
+## P006 research transport
+
+See [P006 GATT session hardening](research/P006_GATT_SESSION_HARDENING.md) for implemented state/resource controls and unresolved nearby-client exhaustion, disconnect polling, relay and compromised-host risks. Synthetic acknowledgments, pairing and proximity signals never authorize; `authorization: never_evaluated`.

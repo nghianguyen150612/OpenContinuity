@@ -1,0 +1,26 @@
+# P006 Watch SE 2 foreground central contract
+
+`authorization: never_evaluated`
+
+This is a source/build and test contract, not a built app or evidence of Watch compatibility. Public CoreBluetooth central APIs make a foreground experiment plausible: `CBCentralManager`, scanning, `CBPeripheral` service/characteristic discovery, `readValue`, and `.withResponse` writes are candidates. Exact availability and behavior on the target watchOS SDK/device, Bluetooth permissions, long reads and radio state must be verified. Xcode/watchOS SDK compilation, simulator, and physical Watch SE 2: **NOT RUN**. No Secure Enclave, user approval, background delivery, native Auto Unlock or enrollment is claimed.
+
+Create a minimal watchOS SwiftUI app in Xcode with a user-initiated foreground Start/Stop button and a CoreBluetooth central delegate retained for the session. Supply the SDK-required Bluetooth usage description, watchOS deployment target compatible with the installed SDK, signing and a paired owned SE 2. Build with Xcode's watchOS destination and record Xcode, SDK, OS and build result. Never reuse mock signing keys. The app sends a fixed harmless synthetic byte string and displays only the synthetic result and errors. No authorization action is present.
+
+Service `8e6f0001-6f4e-4c4f-9b4f-4f70656e436f` has five characteristics:
+
+| UUID | Operation | Data |
+| --- | --- | --- |
+| `8e6f0002-6f4e-4c4f-9b4f-4f70656e436f` | read | one byte version `01` |
+| `8e6f0003-6f4e-4c4f-9b4f-4f70656e436f` | read | version `01`, 8 opaque session bytes, 16 challenge bytes (25 total) |
+| `8e6f0004-6f4e-4c4f-9b4f-4f70656e436f` | write with response | ordered frames |
+| `8e6f0005-6f4e-4c4f-9b4f-4f70656e436f` | read | result |
+| `8e6f0006-6f4e-4c4f-9b4f-4f70656e436f` | write with response | completion or cancellation |
+
+1. Scan for the service on an owned Linux host, connect, discover this exact service and all five characteristics, and verify their advertised read/write properties. Stop scanning when selected; handle Bluetooth authorization, unavailable/powered-off radio, service/characteristic missing and disconnection as failure. An advertisement or connection does not authenticate the host or Watch.
+2. Read and validate version and all 25 challenge bytes. CoreBluetooth does not expose a public caller-selected read offset or negotiated ATT MTU in this API. Determine experimentally whether its `readValue` delivers the complete long characteristic on the target Watch/BlueZ combination. If only a partial value arrives, fail the trial; do not invent bytes or claim interoperability. BlueZ's server serves ATT offset reads with at most MTU minus one bytes. Long-read assembly and last-fragment delivery must be tested for both 25-byte challenge and 44-byte result.
+3. Use `maximumWriteValueLength(for: .withResponse)` as an API limit, but do not assume it is the ATT MTU or permits a single ATT operation. For initial testing cap each frame at **20 bytes**, including its 15-byte header, and require the API limit to be at least 20. Thus each payload chunk is at most 5 bytes even at MTU 23. This avoids relying on prepared/long writes, which the server rejects. Await the callback for every write before sending the next; stop on any error.
+4. Each frame is ASCII `OC`, version `01`, 8-byte ID copied verbatim, `sequence:u8`, `flags:u8` (START bit 0, END bit 1), `total_length:u16` little-endian, and a nonempty payload. START is sequence 0 and carries total length 1–1024; later frames carry zero length. Increase sequence exactly once per frame up to 255; set END only when total bytes are sent. Reject malformed input, write errors, unknown versions and invalid sequencing; do not silently retry a failed session.
+5. Write `OC || 01 || session_id[8] || 01` to Complete after the last write callback, or command `02` to Cancel. Read the full result before requesting a new challenge. A success/cancel result is `01 || status || id[8] || length:u16-LE || SHA256(payload)[32]`, 44 bytes. Status 0 acknowledges the submitted bytes; status 2 hashes the ASCII bytes `cancelled` (length 9). Error is `01 || 80 || id[8] || error_code`, 11 bytes; see `error_code` in the server. Verify the ID, length and digest. A failed write may still leave an error result; it is bounded and tied to the current server session. There is no status-1 pending response in P006.
+6. Set local deadlines below server lifetime and report timeout distinctly: partial writes must progress within 10 seconds, result is retained for 10 seconds, idle session for 30 seconds, and server lifetime is 1–300 seconds. On disconnect, expiration, partial read, unknown ID or error, discard all state and reconnect/read a fresh challenge. Server disconnect detection is polling-based, so a rapid reconnect between polls cannot be assumed to rotate state; wait for confirmed disconnect plus a fresh challenge and compare IDs, or restart the trial.
+
+The 16-byte challenge and 8-byte ID are synthetic transport material. P003/P004's 32-byte nonce and mock signed approval are a distinct protocol; neither this ACK nor a GATT connection may be fed to the verifier as Watch approval. Trusted enrollment, authenticated host/Watch identities, user presence, relay resistance and a real authorization decision remain separately reviewed future work.

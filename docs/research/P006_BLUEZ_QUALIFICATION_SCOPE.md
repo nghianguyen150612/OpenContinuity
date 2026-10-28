@@ -1,6 +1,6 @@
 # P006 — BlueZ host qualification, GATT session hardening and Watch interoperability readiness
 
-**Status:** STARTED — specification and branch only. No P006 implementation or hardware validation claimed.
+**Status:** DRAFT — mock and local validation only; disconnect/reconnect between polls remains unresolved; real BlueZ and Watch hardware NOT RUN. See [validation](../P006_VALIDATION.md).
 **Branch:** `feat/p006-bluez-hardware-qualification`
 **Base:** `main` at `a4e3de698451912980e7359dabb4bd040290b644` (P005 squash merge).
 
@@ -51,13 +51,13 @@ The current code has synthetic GATT service registration, advertisement, version
 
 ## Acceptance and Git policy
 
-- [ ] Source inspection and P005 regression complete; independently evidenced fixes for stale-response/session lifecycle and cleanup/error paths.
-- [ ] Memory and frame bounds, multiple clients, disconnects, timeout and protocol faults tested.
-- [ ] Read-only-first real host qualification procedure, with hardware PASS only if performed.
-- [ ] Watch foreground GATT client interoperability contract and known platform limits documented.
-- [ ] `authorization: never_evaluated` retained in all research paths; no PAM/login-manager integration.
+- [x] Source inspection and P005 regression complete; independently evidenced fixes for stale-response/session lifecycle and cleanup/error paths.
+- [ ] Memory and frame bounds, multiple clients, timeout and protocol faults are tested; disconnect/reconnect between polls remains unresolved.
+- [x] Read-only-first real host qualification procedure, with hardware PASS only if performed.
+- [x] Watch foreground GATT client interoperability contract and known platform limits documented.
+- [x] `authorization: never_evaluated` retained in all research paths; no PAM/login-manager integration.
 - [ ] P001–P005 regressions preserved; `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo build --workspace`, `git diff --check` pass.
 - [ ] Hosted CI assessed on final HEAD, PR opened for review **without auto-merge**.
-- [ ] Original roadmap's Foundation + Settings scope and missing Qt6/QML/product adapter tracked as not yet satisfied.
+- [x] Original roadmap's Foundation + Settings scope and missing Qt6/QML/product adapter tracked as not yet satisfied.
 
 **No automatic P007 work.** P006 closes and qualifies the existing non-authorizing BLE transport prototype; any future real Watch identity/authentication requires separately reviewed hardware and security evidence.
