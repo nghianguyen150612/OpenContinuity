@@ -20,6 +20,12 @@ The CLI only serializes static build capability facts. It does not enumerate ada
 
 P002 adds a fixture-only research command. It parses bounded JSON into sanitized observation metadata; names, company IDs, and RSSI remain untrusted. It does not scan, connect, pair, authenticate, or authorize. The report type can only say `never_evaluated`. See [P002 Security Analysis](research/P002_SECURITY_ANALYSIS.md) for the research threat review.
 
+## P003 endpoint simulation exposure
+
+P003 adds only portable, bounded mock contracts and a deterministic Ed25519 test exchange. A successful mock signature is explicitly simulated and never authorizes. The mock's signing seed and nonce sequence are public test values; no production key or RNG is present. The offline fixture cannot use BlueZ, Apple APIs, networking, keychain, PAM, a root helper, or unlock a Linux session. See [P003 Security Design](research/P003_SECURITY_DESIGN.md).
+
+For a future separately enrolled endpoint, trust must bind a Watch key to one Linux host, account, session and action. The iPhone is an untrusted relay and cannot forge a Watch signature. WatchConnectivity reachability is transport state only; queued transfers can arrive too late. A signed user approval plus Local Authentication does not prove distance: BLE/IP wormholes remain possible, and RSSI or latency is not secure proximity evidence. Stolen Watch, compromised host, key custody, secure enrollment, crash-safe replay storage and key revocation are unresolved before any unlock design.
+
 ## Controls for future work
 
 Keep protocols in portable code and hardware/system access behind narrow adapters. Validate all untrusted frames and lengths. Redact secrets and captures. Use explicit user consent for pairing and device writes. Keep tests deterministic and sanitized. Review least privilege and license compatibility before adding dependencies. No feature may modify PAM, sudoers, authentication configuration, Bluetooth global identity, Wi-Fi drivers, kernel modules or lock-screen security without a separately designed and reviewed milestone; P001 must not do so.

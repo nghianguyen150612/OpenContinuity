@@ -14,6 +14,10 @@ Research outcome on branch `research/p002-watch-auto-unlock`: Apple's native Wat
 
 The P001 files in this repository establish a Rust workspace, portable trust contracts, CLI, idle daemon, CI, and documentation. They do not include a real Bluetooth/BlueZ adapter scaffold or Qt 6/QML Settings framework. The P002 mock research trait is not the missing platform adapter. These items remain unresolved against the unavailable P001–P060 source roadmap; no acceptance criteria are inferred for them.
 
+## P003 — Watch endpoint feasibility (provisional)
+
+The authoritative P001–P060 roadmap remains unavailable, so this P003 entry is a provisional continuation of P002. Public API review found a foreground direct BLE topology (Linux GATT peripheral, Watch CoreBluetooth central), but no third-party Watch peripheral advertising, no guaranteed always-running listener, and no physical SE 2 validation. WatchConnectivity can relay paired-app messages but does not provide a delivery deadline or user-presence proof. A foreground explicit Watch approval with Local Authentication wrist/passcode policy is plausible but awaits Apple SDK/device validation. The portable CLI mock exercises strict signed challenge-response and fail-closed cases only; it is neither Apple communication nor unlock. See P003 matrices/security/hardware plan. No PAM/root/session-unlock integration is in scope.
+
 ## Priority order from the project brief
 
 1. Apple Watch SE 2 native Auto Unlock protocol research.

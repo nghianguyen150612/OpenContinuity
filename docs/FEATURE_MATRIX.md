@@ -1,22 +1,26 @@
 # Feature Matrix
 
-States describe this P002 branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
+States describe this P003 branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
 
 | Area | State | Evidence / scope |
 | --- | --- | --- |
 | Rust portable capability and trust contracts | supported | Implemented and unit-tested in `opencontinuity-core`; this is a project contract, not Apple protocol support. |
 | CLI help, version, doctor | supported | Implemented and tested; doctor remains static and performs no host scan. |
 | Read-only protocol research fixture report | supported | `opencontinuity research watch --fixture <path> [--json]` validates sanitized offline metadata through a deterministic mock. No Bluetooth access, pairing, authentication, or authorization. |
+| Watch endpoint research simulation | supported | `opencontinuity research watch-endpoint --fixture <path> [--json]` runs deterministic Ed25519 mock challenge-response with bounded/versioned messages. Simulation only; report says so and authorization is always `never_evaluated`. |
 | Native Bluetooth/BlueZ adapter | unsupported | No platform adapter; the research `DiscoveryAdapter` is only an interface with a mock implementation. |
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
-| Apple Watch SE 2 Auto Unlock, native protocol | unsupported | Research/implementation not present. Trust stages are unknown; no OS unlock behavior. |
+| Apple Watch SE 2 Auto Unlock, native protocol | unsupported | P002 research found public third-party enrollment/STS support blocked. Trust stages are unknown; no OS unlock behavior. |
 | AirDrop via native AWDL | unsupported | No AWDL or AirDrop implementation. |
 | AirPods Pro 3 AAP/AACP and Settings | unsupported | No device protocol or UI implementation. |
 | AirPods automatic switching | unsupported | Not implemented. |
 | AirPlay, HomeKit, iCloud, remaining Continuity | unsupported | Not implemented. |
 | Device detection / nearby Bluetooth devices | unknown | No discovery or BLE scanning is performed by this branch. Fixture observations are synthetic/local input. |
-| Apple Watch Auto Unlock feasibility | blocked / unknown | Native Linux interoperation is blocked on a documented third-party enrollment/STS endpoint; undocumented feasibility and SE 2 specific behavior remain unknown. See P002 research decision. |
+| Watch direct BLE endpoint | blocked / unknown | Apple documents Watch central-to-peripheral communication and explicitly blocks Watch `CBPeripheralManager` advertising. Foreground central is a feasible test candidate; background/hands-free listener remains blocked. No physical test. See P003 matrices. |
+| Watch–iPhone relay endpoint | experimental | WatchConnectivity supports paired-app messaging with live reachability requirements and queued, non-immediate background delivery. No relay app or Linux transport implemented; phone never substitutes for Watch identity. |
+| Foreground Watch confirmation | experimental | Public Local Authentication wrist-detection policy (watchOS 9+) can accompany explicit foreground action. No Apple build or SE 2 test; no third-party biometric or Touch ID claim. |
+| Apple Watch Auto Unlock feasibility | blocked / unknown | Native Linux interoperation remains blocked on a public third-party enrollment/STS endpoint; undocumented feasibility and SE 2-specific behavior remain unknown. A separate foreground confirmation protocol is not native Auto Unlock and remains unimplemented. |
 | Device identity, cryptographic authentication, freshness, proximity, readiness | unknown | No trust protocol or assessment exists. Nearby signals never imply authorization. |
 | Qt 6/QML Settings UI | unsupported | Planned; not present in P001 or this branch. |
 
-Native interoperability, experimental support, and unimplemented plans are separate claims. No feature is marked experimental because P001 contains no protocol prototype.
+Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No Apple communication or production authentication feature is implemented.

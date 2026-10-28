@@ -22,11 +22,12 @@ cargo run -p opencontinuity-cli -- --help
 cargo run -p opencontinuity-cli -- doctor
 cargo run -p opencontinuity-cli -- doctor --json
 cargo run -p opencontinuity-cli -- research watch --fixture tests/fixtures/watch-discovery.json --json
+cargo run -p opencontinuity-cli -- research watch-endpoint --fixture tests/fixtures/watch-endpoint.json --json
 cargo run -p opencontinuityd -- --help
 cargo run -p opencontinuityd
 ```
 
-The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. The research command reads only a local sanitized JSON fixture; it does not access Bluetooth. This branch does not perform BLE scans, modify system authentication, install services, take over a radio, or write to devices.
+The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. Research commands read only local fixtures and deterministic mocks; they do not access Bluetooth, a network, Apple devices, or key stores. P003 investigates possible Watch endpoint architectures but adds no Watch app or real authentication. This branch does not perform BLE scans, modify system authentication, install services, take over a radio, or write to devices. See [P003 feasibility](docs/research/P003_WATCH_ENDPOINT_FEASIBILITY.md) and [validation](docs/P003_VALIDATION.md).
 
 ## Architecture
 
