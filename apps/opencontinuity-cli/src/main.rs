@@ -6,8 +6,9 @@ use opencontinuity_core::{
 use std::{env, fs, io::Read, process::ExitCode};
 
 mod bluez;
+mod gatt;
 
-const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n       opencontinuity research watch-endpoint --fixture <path> [--json]\n       opencontinuity research watch-ble --capabilities [--json]\n\nCommands:\n  doctor         Report this build's capability states without scanning devices\n  research       Read sanitized fixtures or inspect BlueZ capabilities without changing system state\n  --help         Print this help\n  --version      Print version\n\nWatch fixtures are offline mocks. watch-ble --capabilities performs read-only BlueZ D-Bus inspection only; it does not register GATT objects, advertise, pair, authenticate, or unlock Linux.\n";
+const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n       opencontinuity research watch-endpoint --fixture <path> [--json]\n       opencontinuity research watch-ble --capabilities [--json]\n       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\nCommands:\n  doctor         Report this build's capability states without scanning devices\n  research       Read fixtures, inspect BlueZ, or run an explicit experimental GATT server\n  --help         Print this help\n  --version      Print version\n\nWatch fixtures are offline mocks. watch-ble --capabilities is read-only. watch-gatt serve registers a temporary synthetic service and advertisement; it requires --experimental and never authorizes Linux.\n";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -71,7 +72,103 @@ fn run_research(args: Vec<String>) -> ExitCode {
         Some("watch") => run_watch_research(&args),
         Some("watch-endpoint") => run_watch_endpoint_research(&args),
         Some("watch-ble") => run_watch_ble_research(&args),
+        Some("watch-gatt") => run_watch_gatt_experiment(&args),
         _ => usage_error(),
+    }
+}
+
+fn run_watch_gatt_experiment(args: &[String]) -> ExitCode {
+    if args.get(1).map(String::as_str) != Some("serve") {
+        return usage_error();
+    }
+    let mut adapter = None;
+    let mut duration = None;
+    let mut experimental = false;
+    let mut json_output = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--adapter" if index + 1 < args.len() && adapter.is_none() => {
+                adapter = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--duration-seconds" if index + 1 < args.len() && duration.is_none() => {
+                duration = args[index + 1].parse::<u16>().ok();
+                if duration.is_none() {
+                    return usage_error();
+                }
+                index += 2;
+            }
+            "--experimental" if !experimental => {
+                experimental = true;
+                index += 1;
+            }
+            "--json" if !json_output => {
+                json_output = true;
+                index += 1;
+            }
+            _ => return usage_error(),
+        }
+    }
+    let (Some(adapter), Some(duration)) = (adapter, duration) else {
+        return usage_error();
+    };
+    if let Err(error) = gatt::validate_options(&adapter, duration, experimental) {
+        eprintln!("{error}");
+        return ExitCode::from(2);
+    }
+    let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Err(error) =
+        signal_hook::flag::register(signal_hook::consts::SIGTERM, interrupted.clone())
+    {
+        eprintln!("could not install SIGTERM cleanup handler: {error}");
+        return ExitCode::FAILURE;
+    }
+    let signal = interrupted.clone();
+    if let Err(error) =
+        ctrlc::set_handler(move || signal.store(true, std::sync::atomic::Ordering::Relaxed))
+    {
+        eprintln!("could not install SIGINT/SIGTERM cleanup handler: {error}");
+        return ExitCode::FAILURE;
+    }
+    match gatt::serve(&adapter, duration, interrupted) {
+        Ok(report) => {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).expect("report serializes")
+                );
+            } else {
+                println!(
+                    "Experimental BlueZ GATT server stopped: {}",
+                    report.shutdown_reason.unwrap_or("unknown")
+                );
+                println!("  adapter: {}", report.adapter);
+                println!("  runtime: {} seconds", report.runtime_seconds);
+                println!(
+                    "  controller LE peripheral capability: {}",
+                    report.controller_le_peripheral_capability
+                );
+                println!("  authorization: never evaluated");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&error.report).expect("report serializes")
+                );
+            } else {
+                eprintln!(
+                    "BlueZ GATT experiment failed at {}: {}",
+                    error.report.stage,
+                    error.report.error.as_deref().unwrap_or("unknown error")
+                );
+                eprintln!("  authorization: never evaluated");
+            }
+            ExitCode::FAILURE
+        }
     }
 }
 
