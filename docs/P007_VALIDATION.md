@@ -6,7 +6,7 @@
 
 - Branch: `feat/p007-watchos-foreground-client`
 - Preserved starting commit `1085a26b238ce911ff4eecb139a4a3c5b394fc86` (present as ancestor of the final branch head)
-- Implementation commit under validation: `1e84fe8` (full SHA available in git history); documentation changes follow separately
+- Implementation commit covered by the passing local Rust gates: `1e84fe88fd9b0bf96c7877774d0484a2e22b5d83`; final branch head also includes documentation-only commit(s)
 - Native SwiftUI/CoreBluetooth foreground source: implemented; **NOT COMPILED**
 - Protocol source: implemented; CryptoKit code is not executed in this environment
 - Linux GATT server/BlueZ code: unchanged
@@ -61,6 +61,6 @@ P007 performs synthetic foreground transport only. `authorization: never_evaluat
 
 ## Hosted review
 
-- Pull request: to be recorded after creation
-- Final pushed head SHA and Actions: to be recorded after push
+- Pull request: [#7](https://github.com/nghianguyen150612/OpenContinuity/pull/7) (OPEN, draft)
+- Pushed head at PR creation: `fceec95770825a9ae90dd513270f5afbd4995c85`; current head and Actions status are reported in the delivery report
 - Review state: draft until Apple compilation and hardware-dependent gates are assessed
