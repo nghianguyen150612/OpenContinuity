@@ -33,7 +33,9 @@ No mock, simulator, or host test is reported as a successful Apple Watch SE 2 te
 
 ## Hosted CI and PR
 
-The final hosted CI result and PR URL are checked after push and recorded with the delivery report. A queued or in-progress GitHub Actions run is not a pass. P002's queued checks are not used as evidence for P003.
+The first post-push PR check for code and research documentation commit `dfd03c60180808a69b2497043b24e3b730c88688` completed successfully: [GitHub Actions run 40616553685](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40616553685). The pull-request job completed formatting, Clippy, tests and build. The earlier P003 base-branch run is not used as evidence. This validation-record follow-up is documentation-only and causes a new CI run; the final head SHA's status is reported separately at delivery.
+
+PR #3 is [open against `main`](https://github.com/nghianguyen150612/OpenContinuity/pull/3) for human review. It has not been merged.
 
 ## P003 acceptance checklist
 
@@ -47,7 +49,7 @@ The final hosted CI result and PR URL are checked after push and recorded with t
 - [x] P001/P002 command and report contracts regression-tested.
 - [x] Hardware claims align with evidence; all unavailable Apple/hardware tests marked BLOCKED or NOT RUN.
 - [x] Feasibility, transport/API, security and hardware-plan documents created; architecture, feature matrix, roadmap and threat model updated.
-- [ ] Hosted CI reaches a terminal conclusion on the final pushed head.
-- [ ] P003 PR open for human review; not merged.
+- [x] Hosted PR CI reached PASS for the P003 implementation/documentation head; the final documentation-only head is checked separately at delivery.
+- [x] P003 PR open for human review; not merged.
 
 The full original P001–P060 roadmap remains unavailable. P003 remains a provisional continuation; no P001 Bluetooth adapter or Qt 6/QML Settings scaffolding is claimed.
