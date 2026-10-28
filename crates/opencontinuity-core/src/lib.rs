@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod research;
+pub mod watch_endpoint;
 
 /// The evidence-backed state of a capability or trust stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
