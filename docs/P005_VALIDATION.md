@@ -52,7 +52,7 @@ Rust toolchain: `rustc 1.85.0 (4d91de4e4 2025-02-17)`. Checks required by the P0
 
 ## GitHub Actions and pull request
 
-P005 branch push and PR target `main` are required. Hosted CI must be checked on the final pushed head SHA. PR URL, final head SHA, workflow run URL and conclusion will be recorded after publishing this branch; an earlier commit’s run is not evidence for the final head. Do not merge the PR automatically.
+PR: https://github.com/nghianguyen150612/OpenContinuity/pull/5 (open, targets `main`). The final head SHA and its hosted CI run URL and conclusion are recorded in the delivery report; the PR Checks tab is the live status source. Earlier commit runs are not evidence for the final head. Do not merge the PR automatically.
 
 ## Remaining P001/P005 gaps
 
