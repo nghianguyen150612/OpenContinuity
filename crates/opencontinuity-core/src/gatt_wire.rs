@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 pub const WIRE_VERSION: u8 = 1;
 pub const MAX_MESSAGE_BYTES: usize = 1024;
 pub const MIN_ATT_MTU: usize = 23;
+pub const MAX_ATT_MTU: usize = 517;
 pub const ATT_WRITE_OVERHEAD: usize = 3;
 pub const FRAME_HEADER_BYTES: usize = 15;
 pub const PARTIAL_MESSAGE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -91,7 +92,7 @@ impl FrameAssembler {
         att_mtu: usize,
         now: Instant,
     ) -> Result<FrameProgress, WireError> {
-        if att_mtu < MIN_ATT_MTU {
+        if !(MIN_ATT_MTU..=MAX_ATT_MTU).contains(&att_mtu) {
             return Err(WireError::InvalidAttMtu);
         }
         if frame.len() > att_mtu - ATT_WRITE_OVERHEAD {
@@ -157,11 +158,6 @@ impl FrameAssembler {
         }
         self.message.extend_from_slice(payload);
         self.last_frame_at = Some(now);
-        self.next_sequence = self
-            .next_sequence
-            .checked_add(1)
-            .ok_or(WireError::MessageTooLarge)?;
-
         if end {
             if self.message.len() != total {
                 return Err(WireError::LengthMismatch);
@@ -172,10 +168,21 @@ impl FrameAssembler {
         if self.message.len() == total {
             return Err(WireError::LengthMismatch);
         }
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or(WireError::MessageTooLarge)?;
         Ok(FrameProgress::Partial {
             received: self.message.len(),
             total,
         })
+    }
+
+    pub fn partial_expired(&self, now: Instant) -> bool {
+        !self.complete
+            && self
+                .last_frame_at
+                .is_some_and(|last| now.saturating_duration_since(last) > PARTIAL_MESSAGE_TIMEOUT)
     }
 
     pub fn check_control(&self, value: &[u8]) -> Result<ControlCommand, WireError> {
@@ -250,6 +257,55 @@ mod tests {
         payload: &[u8],
     ) -> Vec<u8> {
         encode_frame(id, seq, start, end, total, payload).unwrap()
+    }
+
+    #[test]
+    fn mtu_and_sequence_limits_are_checked() {
+        let id = *b"session1";
+        let now = Instant::now();
+        let frame = test_frame(id, 0, true, true, 1, b"x");
+        assert_eq!(
+            FrameAssembler::new(id).push(&frame, 22, now),
+            Err(WireError::InvalidAttMtu)
+        );
+        assert_eq!(
+            FrameAssembler::new(id).push(&frame, 518, now),
+            Err(WireError::InvalidAttMtu)
+        );
+        let mut assembler = FrameAssembler::new(id);
+        for sequence in 0..=255u8 {
+            let frame = test_frame(
+                id,
+                sequence,
+                sequence == 0,
+                sequence == 255,
+                if sequence == 0 { 256 } else { 0 },
+                b"x",
+            );
+            let result = assembler.push(&frame, 23, now);
+            if sequence == 255 {
+                assert!(matches!(result, Ok(FrameProgress::Complete(_))));
+            } else {
+                assert!(matches!(result, Ok(FrameProgress::Partial { .. })));
+            }
+        }
+        let mut assembler = FrameAssembler::new(id);
+        for sequence in 0..=255u8 {
+            let frame = test_frame(
+                id,
+                sequence,
+                sequence == 0,
+                false,
+                if sequence == 0 { 257 } else { 0 },
+                b"x",
+            );
+            let result = assembler.push(&frame, 23, now);
+            if sequence == 255 {
+                assert_eq!(result, Err(WireError::MessageTooLarge));
+            } else {
+                assert!(result.is_ok());
+            }
+        }
     }
 
     #[test]

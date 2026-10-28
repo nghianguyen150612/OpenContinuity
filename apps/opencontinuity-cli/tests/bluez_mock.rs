@@ -39,6 +39,9 @@ enum FailureMode {
     NoGatt,
     NoAdvertisement,
     MissingAdvertisementOnCleanup,
+    CleanupFailure,
+    AdvertisementAndRollbackFailure,
+    SlowAdvertisement,
 }
 
 struct MockAdapter {
@@ -81,8 +84,12 @@ impl MockGattManager {
         Ok(())
     }
 
-    fn unregister_application(&self, _application: OwnedObjectPath) {
+    fn unregister_application(&self, _application: OwnedObjectPath) -> Result<(), MockBluezError> {
         self.events.lock().unwrap().push("unregister_application");
+        if matches!(self.failure, FailureMode::AdvertisementAndRollbackFailure) {
+            return Err(MockBluezError::Failed("rollback failed".into()));
+        }
+        Ok(())
     }
 }
 
@@ -101,12 +108,18 @@ impl MockAdvertisingManager {
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(), MockBluezError> {
         self.events.lock().unwrap().push("register_advertisement");
+        if matches!(self.failure, FailureMode::SlowAdvertisement) {
+            thread::sleep(Duration::from_secs(3));
+        }
         let caller = header
             .sender()
             .ok_or_else(|| MockBluezError::Failed("missing D-Bus sender".into()))?
             .to_string();
         *self.advertisement_info.lock().unwrap() = Some((caller, advertisement.to_string()));
-        if matches!(self.failure, FailureMode::Advertisement) {
+        if matches!(
+            self.failure,
+            FailureMode::Advertisement | FailureMode::AdvertisementAndRollbackFailure
+        ) {
             return Err(MockBluezError::NotPermitted(
                 "mock advertising slots exhausted".into(),
             ));
@@ -119,6 +132,9 @@ impl MockAdvertisingManager {
         _advertisement: OwnedObjectPath,
     ) -> Result<(), MockBluezError> {
         self.events.lock().unwrap().push("unregister_advertisement");
+        if matches!(self.failure, FailureMode::CleanupFailure) {
+            return Err(MockBluezError::Failed("cleanup failed".into()));
+        }
         if matches!(self.failure, FailureMode::MissingAdvertisementOnCleanup) {
             return Err(MockBluezError::DoesNotExist(
                 "mock advertisement already removed by BlueZ".into(),
@@ -529,6 +545,10 @@ impl PrivateBluez {
                 .call("ReadValue", &read_options(Some(22)))
                 .unwrap(),
         );
+        let terminator: Vec<u8> = characteristic(characteristic_path(3))
+            .call("ReadValue", &read_options(Some(44)))
+            .unwrap();
+        assert!(terminator.is_empty());
         assert_eq!(response[0..2], [1, 0]);
         assert_eq!(response[2..10], session_id);
         assert_eq!(
@@ -772,4 +792,118 @@ fn cleanup_treats_an_already_removed_advertisement_as_idempotent() {
             "unregister_application"
         ]
     );
+}
+
+#[test]
+fn cleanup_failure_is_reported_and_application_cleanup_still_attempted() {
+    let mock = PrivateBluez::start(FailureMode::CleanupFailure);
+    let output = mock.run_cli(1);
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "stopping");
+    assert_eq!(report["shutdown_reason"], "timeout");
+    assert!(
+        report["cleanup_errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("advertisement unregister failed")
+    );
+    assert!(report["advertisement_registered"].as_bool().unwrap());
+    assert!(!report["application_registered"].as_bool().unwrap());
+    assert_eq!(
+        &*mock.events.lock().unwrap(),
+        &[
+            "register_application",
+            "register_advertisement",
+            "unregister_advertisement",
+            "unregister_application"
+        ]
+    );
+}
+
+#[test]
+fn rollback_failure_keeps_registration_failure_and_cleanup_details() {
+    let mock = PrivateBluez::start(FailureMode::AdvertisementAndRollbackFailure);
+    let output = mock.run_cli(2);
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "registering_advertisement");
+    assert!(
+        report["error"]
+            .as_str()
+            .unwrap()
+            .contains("advertisement registration failed")
+    );
+    assert!(
+        report["cleanup_errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("application unregister failed")
+    );
+}
+
+#[test]
+fn loss_of_bluez_owner_during_active_session_reports_failure_and_cleanup() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !mock
+        .events
+        .lock()
+        .unwrap()
+        .contains(&"register_advertisement")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        assert!(child.try_wait().unwrap().is_none());
+        thread::sleep(Duration::from_millis(10));
+    }
+    mock.stop.store(true, Ordering::Relaxed);
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "active");
+    assert!(report["error"].as_str().unwrap().contains("owner lost"));
+    assert_eq!(report["application_registration_succeeded"], true);
+    assert_eq!(report["advertisement_registration_succeeded"], true);
+    assert!(!report["cleanup_errors"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn registration_timeout_is_bounded_and_attempts_rollback() {
+    let mock = PrivateBluez::start(FailureMode::SlowAdvertisement);
+    let start = std::time::Instant::now();
+    let output = mock.run_cli(10);
+    assert!(start.elapsed() < Duration::from_secs(8));
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "registering_advertisement");
+    assert!(report["error"].as_str().unwrap().contains("timed out"));
+    let events = mock.events.lock().unwrap();
+    assert!(events.contains(&"unregister_advertisement"));
+    assert!(events.contains(&"unregister_application"));
+}
+
+#[test]
+fn bus_loss_during_active_run_returns_original_error() {
+    let mut mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !mock
+        .events
+        .lock()
+        .unwrap()
+        .contains(&"register_advertisement")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        assert!(child.try_wait().unwrap().is_none());
+        thread::sleep(Duration::from_millis(10));
+    }
+    mock.daemon.kill().unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "active");
+    assert!(report["error"].as_str().unwrap().contains("owner lost"));
+    assert!(!report["cleanup_errors"].as_array().unwrap().is_empty());
+    assert_eq!(report["authorization"], "never_evaluated");
 }
