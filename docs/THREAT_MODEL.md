@@ -44,4 +44,4 @@ Keep protocols in portable code and hardware/system access behind narrow adapter
 
 ## P006 research transport
 
-See [P006 GATT session hardening](research/P006_GATT_SESSION_HARDENING.md) for implemented state/resource controls and unresolved nearby-client exhaustion, disconnect polling, relay and compromised-host risks. Synthetic acknowledgments, pairing and proximity signals never authorize; `authorization: never_evaluated`.
+See [P006 GATT session hardening](research/P006_GATT_SESSION_HARDENING.md) for implemented state/resource controls and unresolved nearby-client exhaustion, unreported disconnects, relay and compromised-host risks. Synthetic acknowledgments, pairing and proximity signals never authorize; `authorization: never_evaluated`.
