@@ -5,7 +5,9 @@ use opencontinuity_core::{
 };
 use std::{env, fs, io::Read, process::ExitCode};
 
-const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n       opencontinuity research watch-endpoint --fixture <path> [--json]\n\nCommands:\n  doctor         Report this build's capability states without scanning devices\n  research       Read sanitized offline protocol research fixtures\n  --help         Print this help\n  --version      Print version\n\nResearch commands use local mock fixtures only. They do not access Bluetooth or a network, authenticate an Apple Watch, or unlock Linux.\n";
+mod bluez;
+
+const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n       opencontinuity research watch-endpoint --fixture <path> [--json]\n       opencontinuity research watch-ble --capabilities [--json]\n\nCommands:\n  doctor         Report this build's capability states without scanning devices\n  research       Read sanitized fixtures or inspect BlueZ capabilities without changing system state\n  --help         Print this help\n  --version      Print version\n\nWatch fixtures are offline mocks. watch-ble --capabilities performs read-only BlueZ D-Bus inspection only; it does not register GATT objects, advertise, pair, authenticate, or unlock Linux.\n";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -68,8 +70,56 @@ fn run_research(args: Vec<String>) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("watch") => run_watch_research(&args),
         Some("watch-endpoint") => run_watch_endpoint_research(&args),
+        Some("watch-ble") => run_watch_ble_research(&args),
         _ => usage_error(),
     }
+}
+
+fn run_watch_ble_research(args: &[String]) -> ExitCode {
+    let mut capabilities = false;
+    let mut json_output = false;
+    for argument in args.iter().skip(1) {
+        match argument.as_str() {
+            "--capabilities" if !capabilities => capabilities = true,
+            "--json" if !json_output => json_output = true,
+            _ => return usage_error(),
+        }
+    }
+    if !capabilities {
+        return usage_error();
+    }
+    let report = bluez::inspect();
+    if json_output {
+        match serde_json::to_string_pretty(&report) {
+            Ok(output) => println!("{output}"),
+            Err(error) => {
+                eprintln!("failed to serialize BlueZ capability report: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("BlueZ read-only capability discovery:");
+        println!("  discovery: {}", report.discovery);
+        println!(
+            "  BlueZ version: {}",
+            report.bluez_version.as_deref().unwrap_or("unknown")
+        );
+        for adapter in &report.adapters {
+            println!(
+                "  adapter: {} (powered: {:?})",
+                adapter.object_path, adapter.powered
+            );
+            println!("    GattManager1: {:?}", adapter.gatt_manager);
+            println!(
+                "    LEAdvertisingManager1: {:?}",
+                adapter.le_advertising_manager
+            );
+        }
+        println!("  hardware Watch observations: not run");
+        println!("  authentication test: not run");
+        println!("  authorization: never evaluated");
+    }
+    ExitCode::SUCCESS
 }
 
 fn run_watch_research(args: &[String]) -> ExitCode {

@@ -23,6 +23,6 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --all-targets
       - name: Build
         run: cargo build --workspace

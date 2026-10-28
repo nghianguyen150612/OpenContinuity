@@ -18,6 +18,89 @@ const SIGNATURE_BYTES: usize = 64;
 const MAX_ID_BYTES: usize = 128;
 const MAX_CHALLENGE_LIFETIME_MS: u64 = 30_000;
 const MOCK_ONLY_SIGNING_SEED: [u8; 32] = [0x43; 32];
+#[cfg(test)]
+const MOCK_ATTACKER_SIGNING_SEED: [u8; 32] = [0xa7; 32];
+
+/// Algorithm identifiers are explicit. Ed25519 here is strictly a Rust mock;
+/// it is not asserted to be available from watchOS Secure Enclave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentAlgorithm {
+    Ed25519MockV1,
+    /// Reserved to make unsupported algorithm selection reject explicitly.
+    P256EcdsaSha256V1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentLifecycle {
+    Active,
+    Revoked,
+    Suspended,
+}
+
+/// Test-only trust anchor constructed separately from the endpoint under test.
+/// P004 deliberately has no persistent or production enrollment store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MockEnrollmentRecord {
+    pub enrollment_id: String,
+    pub host_identity: String,
+    pub account_identity: String,
+    pub watch_endpoint_identity: String,
+    pub verification_public_key: Vec<u8>,
+    pub key_algorithm: EnrollmentAlgorithm,
+    pub key_version: u16,
+    pub lifecycle_state: EnrollmentLifecycle,
+    pub revoked: bool,
+}
+
+impl MockEnrollmentRecord {
+    pub fn new_for_test(
+        enrollment_id: impl Into<String>,
+        host_identity: impl Into<String>,
+        account_identity: impl Into<String>,
+        watch_endpoint_identity: impl Into<String>,
+        verification_public_key: [u8; 32],
+    ) -> Result<Self, ProtocolError> {
+        let record = Self {
+            enrollment_id: enrollment_id.into(),
+            host_identity: host_identity.into(),
+            account_identity: account_identity.into(),
+            watch_endpoint_identity: watch_endpoint_identity.into(),
+            verification_public_key: verification_public_key.to_vec(),
+            key_algorithm: EnrollmentAlgorithm::Ed25519MockV1,
+            key_version: 1,
+            lifecycle_state: EnrollmentLifecycle::Active,
+            revoked: false,
+        };
+        record.validate()?;
+        Ok(record)
+    }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        validate_id(&self.enrollment_id)?;
+        validate_id(&self.host_identity)?;
+        validate_id(&self.account_identity)?;
+        validate_id(&self.watch_endpoint_identity)?;
+        if self.key_version != 1 {
+            return Err(ProtocolError::AlgorithmMismatch);
+        }
+        if self.verification_public_key.len() != 32 {
+            return Err(ProtocolError::Malformed);
+        }
+        if self.key_algorithm != EnrollmentAlgorithm::Ed25519MockV1 {
+            return Err(ProtocolError::AlgorithmMismatch);
+        }
+        if self.revoked || self.lifecycle_state == EnrollmentLifecycle::Revoked {
+            return Err(ProtocolError::EnrollmentRevoked);
+        }
+        if self.lifecycle_state != EnrollmentLifecycle::Active {
+            return Err(ProtocolError::EnrollmentInactive);
+        }
+        Ok(())
+    }
+}
 
 /// Research evidence for a capability. These claims describe public API
 /// documentation, not an implementation or hardware test in this project.
@@ -123,6 +206,10 @@ pub enum AuthorizationState {
 pub struct WatchEndpointReport {
     pub schema_version: u8,
     pub source: String,
+    pub mock_simulation: bool,
+    pub bluez_capability_discovery: String,
+    pub experimental_gatt_transport: String,
+    pub hardware_watch_observations: String,
     pub capabilities: EndpointCapabilities,
     pub transport: TransportReport,
     pub authentication: AuthenticationReport,
@@ -287,6 +374,11 @@ pub enum ProtocolError {
     UserRejected,
     MissingPresence,
     Replay,
+    UnknownEnrollment,
+    EnrollmentRevoked,
+    EnrollmentInactive,
+    AlgorithmMismatch,
+    EnrollmentBindingMismatch,
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -302,6 +394,13 @@ impl std::fmt::Display for ProtocolError {
             Self::UserRejected => "Watch user rejected the request",
             Self::MissingPresence => "explicit user-presence evidence is missing",
             Self::Replay => "duplicate challenge nonce rejected",
+            Self::UnknownEnrollment => "no independently enrolled key exists for this endpoint",
+            Self::EnrollmentRevoked => "enrollment is not active",
+            Self::EnrollmentInactive => "enrollment is suspended or inactive",
+            Self::AlgorithmMismatch => "enrollment key algorithm or version is unsupported",
+            Self::EnrollmentBindingMismatch => {
+                "challenge does not match the enrolled host and account"
+            }
         };
         formatter.write_str(message)
     }
@@ -347,11 +446,24 @@ impl MockWatchEndpoint {
     ) -> Result<Self, ProtocolError> {
         let identity = identity.into();
         validate_id(&identity)?;
+        Self::with_signing_seed(identity, approved, user_presence, MOCK_ONLY_SIGNING_SEED)
+    }
+
+    /// Construct a deterministic endpoint with an explicitly supplied mock
+    /// key. Intended for negative substitution tests only.
+    pub fn with_signing_seed(
+        identity: impl Into<String>,
+        approved: bool,
+        user_presence: UserPresenceEvidence,
+        seed: [u8; 32],
+    ) -> Result<Self, ProtocolError> {
+        let identity = identity.into();
+        validate_id(&identity)?;
         Ok(Self {
             identity,
             approved,
             user_presence,
-            signing_key: SigningKey::from_bytes(&MOCK_ONLY_SIGNING_SEED),
+            signing_key: SigningKey::from_bytes(&seed),
         })
     }
 
@@ -451,6 +563,39 @@ pub struct ReplayGuard {
 }
 
 impl ReplayGuard {
+    /// Verify against a separately constructed enrollment record. The
+    /// endpoint under test never supplies the expected public key.
+    pub fn verify_enrolled(
+        &mut self,
+        enrollment: Option<&MockEnrollmentRecord>,
+        challenge: &WatchChallenge,
+        approval: &WatchApproval,
+        now_ms: u64,
+    ) -> Result<(), ProtocolError> {
+        let enrollment = enrollment.ok_or(ProtocolError::UnknownEnrollment)?;
+        enrollment.validate()?;
+        if challenge.host_id != enrollment.host_identity
+            || challenge.local_user_id != enrollment.account_identity
+        {
+            return Err(ProtocolError::EnrollmentBindingMismatch);
+        }
+        if approval.identity != enrollment.watch_endpoint_identity {
+            return Err(ProtocolError::IdentityMismatch);
+        }
+        let key: [u8; 32] = enrollment
+            .verification_public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| ProtocolError::Malformed)?;
+        self.verify(
+            challenge,
+            approval,
+            &enrollment.watch_endpoint_identity,
+            &key,
+            now_ms,
+        )
+    }
+
     pub fn verify(
         &mut self,
         challenge: &WatchChallenge,
@@ -557,7 +702,18 @@ pub fn simulate(fixture: &WatchEndpointFixture) -> Result<WatchEndpointReport, P
         fixture.watch_approved,
         fixture.user_presence,
     )?;
-    let expected_key = endpoint.public_key();
+    // Construct the mock trust anchor before and independently of transport
+    // endpoint creation. Authentication never reads the endpoint's own key.
+    let enrolled_key = SigningKey::from_bytes(&MOCK_ONLY_SIGNING_SEED)
+        .verifying_key()
+        .to_bytes();
+    let enrollment = MockEnrollmentRecord::new_for_test(
+        "enrollment-mock-1",
+        "linux-host-mock",
+        "local-user-mock",
+        &fixture.expected_watch_identity,
+        enrolled_key,
+    )?;
     let mut transport = MockTransportAdapter::new(
         fixture.transport,
         fixture.transport_connected,
@@ -566,22 +722,20 @@ pub fn simulate(fixture: &WatchEndpointFixture) -> Result<WatchEndpointReport, P
     let exchange = transport.deliver(&mut endpoint, &challenge);
     let mut replay_guard = ReplayGuard::default();
     let result = exchange.and_then(|approval| {
-        replay_guard.verify(
+        replay_guard.verify_enrolled(
+            Some(&enrollment),
             &challenge,
             &approval,
-            &fixture.expected_watch_identity,
-            &expected_key,
             fixture.now_ms + fixture.response_delay_ms,
         )?;
         Ok(approval)
     });
     let (authentication, replay_rejected, reason) = match result {
         Ok(approval) => {
-            let replay_rejected = replay_guard.verify(
+            let replay_rejected = replay_guard.verify_enrolled(
+                Some(&enrollment),
                 &challenge,
                 &approval,
-                &fixture.expected_watch_identity,
-                &expected_key,
                 fixture.now_ms + fixture.response_delay_ms,
             ) == Err(ProtocolError::Replay);
             (
@@ -599,6 +753,10 @@ pub fn simulate(fixture: &WatchEndpointFixture) -> Result<WatchEndpointReport, P
     Ok(WatchEndpointReport {
         schema_version: 1,
         source: "offline_mock_simulation_only".into(),
+        mock_simulation: true,
+        bluez_capability_discovery: "not_performed".into(),
+        experimental_gatt_transport: "not_implemented".into(),
+        hardware_watch_observations: "not_run".into(),
         capabilities: endpoint.capabilities(),
         transport: TransportReport {
             kind: transport.kind(),
@@ -695,6 +853,99 @@ mod tests {
     fn approval_for(challenge: &WatchChallenge, presence: UserPresenceEvidence) -> WatchApproval {
         let mut endpoint = MockWatchEndpoint::new("watch-1", true, presence).unwrap();
         endpoint.approve(challenge, 150).unwrap()
+    }
+
+    fn test_enrollment() -> MockEnrollmentRecord {
+        let enrolled_key = SigningKey::from_bytes(&MOCK_ONLY_SIGNING_SEED)
+            .verifying_key()
+            .to_bytes();
+        MockEnrollmentRecord::new_for_test("enroll-1", "host-1", "user-1", "watch-1", enrolled_key)
+            .unwrap()
+    }
+
+    #[test]
+    fn independently_enrolled_key_accepts_bound_mock_approval() {
+        let challenge = challenge();
+        let approval = approval_for(&challenge, UserPresenceEvidence::ExplicitConfirmation);
+        let enrollment = test_enrollment();
+        let mut guard = ReplayGuard::default();
+        assert_eq!(
+            guard.verify_enrolled(Some(&enrollment), &challenge, &approval, 150),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn unknown_revoked_and_inactive_enrollment_fail_closed() {
+        let challenge = challenge();
+        let approval = approval_for(&challenge, UserPresenceEvidence::ExplicitConfirmation);
+        let mut guard = ReplayGuard::default();
+        assert_eq!(
+            guard.verify_enrolled(None, &challenge, &approval, 150),
+            Err(ProtocolError::UnknownEnrollment)
+        );
+        let mut revoked = test_enrollment();
+        revoked.revoked = true;
+        assert_eq!(
+            guard.verify_enrolled(Some(&revoked), &challenge, &approval, 150),
+            Err(ProtocolError::EnrollmentRevoked)
+        );
+        let mut suspended = test_enrollment();
+        suspended.lifecycle_state = EnrollmentLifecycle::Suspended;
+        assert_eq!(
+            guard.verify_enrolled(Some(&suspended), &challenge, &approval, 150),
+            Err(ProtocolError::EnrollmentInactive)
+        );
+    }
+
+    #[test]
+    fn substituted_endpoint_key_cannot_impersonate_enrollment() {
+        let challenge = challenge();
+        let mut attacker = MockWatchEndpoint::with_signing_seed(
+            "watch-1",
+            true,
+            UserPresenceEvidence::ExplicitConfirmation,
+            MOCK_ATTACKER_SIGNING_SEED,
+        )
+        .unwrap();
+        let forged = attacker.approve(&challenge, 150).unwrap();
+        let enrollment = test_enrollment();
+        let mut guard = ReplayGuard::default();
+        assert_eq!(
+            guard.verify_enrolled(Some(&enrollment), &challenge, &forged, 150),
+            Err(ProtocolError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn enrolled_algorithm_host_account_and_endpoint_bindings_are_checked() {
+        let challenge = challenge();
+        let approval = approval_for(&challenge, UserPresenceEvidence::ExplicitConfirmation);
+        let mut enrollment = test_enrollment();
+        enrollment.key_algorithm = EnrollmentAlgorithm::P256EcdsaSha256V1;
+        let mut guard = ReplayGuard::default();
+        assert_eq!(
+            guard.verify_enrolled(Some(&enrollment), &challenge, &approval, 150),
+            Err(ProtocolError::AlgorithmMismatch)
+        );
+        enrollment = test_enrollment();
+        enrollment.host_identity = "other-host".into();
+        assert_eq!(
+            guard.verify_enrolled(Some(&enrollment), &challenge, &approval, 150),
+            Err(ProtocolError::EnrollmentBindingMismatch)
+        );
+        enrollment = test_enrollment();
+        enrollment.account_identity = "other-user".into();
+        assert_eq!(
+            guard.verify_enrolled(Some(&enrollment), &challenge, &approval, 150),
+            Err(ProtocolError::EnrollmentBindingMismatch)
+        );
+        enrollment = test_enrollment();
+        enrollment.watch_endpoint_identity = "other-watch".into();
+        assert_eq!(
+            guard.verify_enrolled(Some(&enrollment), &challenge, &approval, 150),
+            Err(ProtocolError::IdentityMismatch)
+        );
     }
 
     #[test]
@@ -838,6 +1089,36 @@ mod tests {
     }
 
     #[test]
+    fn rejects_wrong_host_account_session_and_action_in_signed_transcript() {
+        let challenge = challenge();
+        let enrollment = test_enrollment();
+        let endpoint =
+            MockWatchEndpoint::new("watch-1", true, UserPresenceEvidence::ExplicitConfirmation)
+                .unwrap();
+        let approval = endpoint.clone().approve(&challenge, 150).unwrap();
+        let mut variants = Vec::new();
+        let mut changed = approval.clone();
+        changed.host_id = "other-host".into();
+        variants.push(changed);
+        let mut changed = approval.clone();
+        changed.local_user_id = "other-user".into();
+        variants.push(changed);
+        let mut changed = approval.clone();
+        changed.session_id = "other-session".into();
+        variants.push(changed);
+        let mut changed = approval;
+        changed.action = "other-action".into();
+        variants.push(changed);
+        for variant in variants {
+            let mut guard = ReplayGuard::default();
+            assert_eq!(
+                guard.verify_enrolled(Some(&enrollment), &challenge, &variant, 150),
+                Err(ProtocolError::Malformed)
+            );
+        }
+    }
+
+    #[test]
     fn rejects_missing_presence_user_rejection_transport_failure_and_tampering() {
         assert_eq!(
             simulate(&WatchEndpointFixture {
@@ -927,6 +1208,10 @@ mod tests {
         let value: Value = serde_json::to_value(report).unwrap();
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["source"], "offline_mock_simulation_only");
+        assert_eq!(value["mock_simulation"], true);
+        assert_eq!(value["bluez_capability_discovery"], "not_performed");
+        assert_eq!(value["experimental_gatt_transport"], "not_implemented");
+        assert_eq!(value["hardware_watch_observations"], "not_run");
         assert_eq!(value["authorization"], "never_evaluated");
     }
 }

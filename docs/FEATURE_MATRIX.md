@@ -1,6 +1,6 @@
 # Feature Matrix
 
-States describe this P003 branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
+States describe this P004 branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
 
 | Area | State | Evidence / scope |
 | --- | --- | --- |
@@ -8,7 +8,10 @@ States describe this P003 branch build. `unsupported` means no implementation is
 | CLI help, version, doctor | supported | Implemented and tested; doctor remains static and performs no host scan. |
 | Read-only protocol research fixture report | supported | `opencontinuity research watch --fixture <path> [--json]` validates sanitized offline metadata through a deterministic mock. No Bluetooth access, pairing, authentication, or authorization. |
 | Watch endpoint research simulation | supported | `opencontinuity research watch-endpoint --fixture <path> [--json]` runs deterministic Ed25519 mock challenge-response with bounded/versioned messages. Simulation only; report says so and authorization is always `never_evaluated`. |
-| Native Bluetooth/BlueZ adapter | unsupported | No platform adapter; the research `DiscoveryAdapter` is only an interface with a mock implementation. |
+| BlueZ capability discovery | experimental | `opencontinuity research watch-ble --capabilities [--json]` read-only inspects BlueZ D-Bus object/interface availability when the system bus and BlueZ exist. Does not register, advertise, pair, or connect. |
+| Native Bluetooth/BlueZ GATT peripheral | unsupported | No GATT object server or advertisement registration implementation; no controller present/validated in this environment. |
+| Mock enrollment verification | supported | Separate in-memory `MockEnrollmentRecord` binds host/account/Watch identity and algorithm to the expected key. Endpoint key substitution, unknown/revoked enrollment and binding/algorithm mismatch fail closed in Rust tests. Not production enrollment/storage. |
+| watchOS companion app | blocked | No Apple SDK/Xcode/signing target in this Linux environment; no app source is claimed buildable and no Apple compilation or device run occurred. |
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
 | Apple Watch SE 2 Auto Unlock, native protocol | unsupported | P002 research found public third-party enrollment/STS support blocked. Trust stages are unknown; no OS unlock behavior. |
 | AirDrop via native AWDL | unsupported | No AWDL or AirDrop implementation. |

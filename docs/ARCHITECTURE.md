@@ -16,6 +16,10 @@ P002 adds `opencontinuity_core::research`, a portable, sanitized fixture model a
 
 P003 adds `opencontinuity_core::watch_endpoint`, portable endpoint/transport traits, typed capability evidence, bounded versioned challenge/approval messages and deterministic mocks. The mock uses `ed25519-dalek` to exercise transcript-bound signatures and replay/expiry/presence rejection. `opencontinuity research watch-endpoint --fixture <path> [--json]` reports simulated transport/authentication state and always emits `authorization: never_evaluated`. Its test-only private seed and deterministic SHA-256 nonce sequence are public mock data, never production secrets or a CSPRNG. No Apple SDK, Bluetooth, network, keychain, device, PAM or host authorization integration exists. See the P003 validation and security design for boundaries and limitations.
 
+P004 adds a separate `MockEnrollmentRecord` trust anchor with host/account/Watch identities, a tagged algorithm and version, lifecycle and revocation state. The verifier uses that record rather than taking its expected key from the endpoint under test; deterministic substitution tests reject a different signer. This remains mock-only with no persistent enrollment store. `apps/opencontinuity-cli/src/bluez.rs` performs **read-only** `busctl` object/interface inspection. `opencontinuity research watch-ble --capabilities [--json]` cannot register services or advertise. No BlueZ D-Bus object server, Swift/watchOS target, host-signed challenge, pairing, or Linux authorization path is implemented. Reports always say `authorization: never_evaluated`.
+
+`opencontinuity_core::bluez_research` is a deterministic lifecycle model for explicit opt-in, bounded-duration registration, unsupported capabilities, application/advertisement registration failure, and idempotent cleanup on timeout, signal, adapter loss, or manual stop. It is a test model only and never calls BlueZ; real registration remains blocked in this environment.
+
 ## Planned module boundaries
 
 Add modules when there is concrete implementation work:

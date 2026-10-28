@@ -1,6 +1,6 @@
 # P004 — Foreground Watch ↔ Linux BLE GATT feasibility spike
 
-**Status:** STARTED / DESIGN & EVIDENCE PLAN ONLY; no hardware validation, Apple application, radio integration, or unlock implementation.
+**Status:** IMPLEMENTED RUST MOCK ENROLLMENT AND READ-ONLY BLUETOOTH DIAGNOSTICS; no GATT server, Apple application, hardware validation, or unlock implementation.
 **Base:** `main` at `1d5d3f5a19f81727a5d3deef61d24de5f82d4ed4` (P003 squash merge).
 **Working branch:** `research/p004-watch-ble-gatt-spike`.
 **Reference hardware:** owned Apple Watch SE (2nd generation), paired iPhone, Arch Linux/BlueZ development host.
@@ -50,6 +50,17 @@ A successful link-level experiment is **not Apple Auto Unlock interoperability**
 - Use deterministic unit/mock tests and optional loopback/GATT-host tests. Separate all host-only validation from physical Watch tests.
 - Version and bound all messages; reject unknown fields and unexpected states. Only an experimental non-authorizing status may be returned; `authorization` remains `never_evaluated`.
 - Treat successful BLE transport connection as a transport event, not authorization.
+
+## P004 implementation result
+
+- **VERIFIED:** Rust CLI now offers `opencontinuity research watch-ble --capabilities [--json]`. It reads BlueZ's D-Bus object tree/interfaces using `busctl`; it does not register GATT application objects, register advertisements, power the adapter, pair, or connect.
+- **VERIFIED:** an independently created in-memory `MockEnrollmentRecord` binds enrollment ID, host, account, Watch endpoint, algorithm/version, lifecycle and revocation. The test verifier uses the pinned record, and a same-identity endpoint signed with a different key fails.
+- **VERIFIED:** portable mock BlueZ lifecycle tests cover explicit opt-in, bounded duration, missing adapter/managers, registration failures, reverse-order cleanup, idempotent stop, timeout, SIGINT, SIGTERM and adapter loss. They simulate state only and do not register BlueZ objects.
+- **VERIFIED:** local `cargo fmt`, Clippy, workspace all-target tests, workspace build and diff whitespace checks pass (details in `docs/P004_VALIDATION.md`).
+- **VERIFIED:** diagnostics in this container return `bluez_service_or_system_bus_unavailable`, null BlueZ version, no adapters, `hardware_watch_observations: not_run`, and `authorization: never_evaluated`.
+- **BLOCKED:** actual BlueZ GATT object registration/advertising and controller capability test; there is no system D-Bus or BlueZ/controller tooling.
+- **BLOCKED / NOT RUN:** watchOS SDK build/signing and physical Watch/iPhone tests; no Apple toolchain or devices are available. No Swift target is claimed buildable.
+- **DOCUMENTED:** CoreBluetooth foreground central feasibility and CryptoKit P-256/SHA-256 candidate contract. The implementation remains Ed25519 mock-only; host signature verification before Watch consent is a documented requirement but is not implemented.
 
 ## Deliverables for Codex
 
