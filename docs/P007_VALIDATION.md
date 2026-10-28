@@ -6,7 +6,7 @@
 
 - Branch: `feat/p007-watchos-foreground-client`
 - Preserved starting commit `1085a26b238ce911ff4eecb139a4a3c5b394fc86` (present as ancestor of the final branch head)
-- Implementation commit covered by the passing local Rust gates: `1e84fe88fd9b0bf96c7877774d0484a2e22b5d83`; final branch head also includes documentation-only commit(s)
+- Implementation commit covered by the passing local Rust gates: `1e84fe84e6e09bf357f2fe8a92c7e7f302587231`; final branch head also includes documentation-only commit(s)
 - Native SwiftUI/CoreBluetooth foreground source: implemented; **NOT COMPILED**
 - Protocol source: implemented; CryptoKit code is not executed in this environment
 - Linux GATT server/BlueZ code: unchanged
