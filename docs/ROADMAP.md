@@ -20,7 +20,11 @@ The authoritative P001–P060 roadmap remains unavailable, so this P003 entry is
 
 ## P004 — Foreground Watch ↔ Linux BLE GATT feasibility (provisional)
 
-The P004 working scope continues the available P003 branch and has not been reconciled with the missing P001–P060 planning source. It adds a separate mock enrollment trust record, signer-substitution tests, and read-only BlueZ D-Bus capability inspection via `opencontinuity research watch-ble --capabilities [--json]`. It does not register a GATT application or advertise because the implementation environment has no live system bus, BlueZ daemon, adapter or controller. Apple SDK, signing, Watch and iPhone are unavailable; no Swift target or hardware result is claimed. Ed25519 remains test-only; a P-256/SHA-256 interop shape is documented but not implemented. Host-signed challenge verification and production enrollment storage do not exist. Reports always retain `authorization: never_evaluated`. See P004 validation and research records.
+The P004 scope, at its final head, added a separate mock enrollment trust record, signer-substitution tests, and read-only BlueZ inspection. It had no GATT service or advertisement implementation. P004 validation is historical; see the P004 validation document.
+
+## P005 — Experimental Linux BlueZ GATT transport (provisional)
+
+The original P001–P060 source remains unavailable, so P005 is a provisional continuation rather than a claim about the missing milestone definition. This branch adds a time-bounded, explicitly opted-in Linux BlueZ GATT server and temporary LE advertisement, plus a bounded fragmented wire protocol and rollback tests. The server uses zbus over the system D-Bus and will not power on or reconfigure the adapter. Local hardware lacks BlueZ and a system bus; real registration, RF advertisement and connection are NOT RUN. There is no Apple client or Watch SE 2 test. The production Bluetooth adapter scaffolding and Qt6/QML Settings framework from P001 remain incomplete. No authorization or unlock behavior is added.
 
 The original Qt6/QML Settings framework and production Bluetooth adapter scaffolding remain absent and unresolved. P004's read-only capability probe is not either deliverable.
 

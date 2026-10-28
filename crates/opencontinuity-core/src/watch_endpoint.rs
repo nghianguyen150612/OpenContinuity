@@ -755,7 +755,7 @@ pub fn simulate(fixture: &WatchEndpointFixture) -> Result<WatchEndpointReport, P
         source: "offline_mock_simulation_only".into(),
         mock_simulation: true,
         bluez_capability_discovery: "not_performed".into(),
-        experimental_gatt_transport: "not_implemented".into(),
+        experimental_gatt_transport: "not_used_by_offline_mock".into(),
         hardware_watch_observations: "not_run".into(),
         capabilities: endpoint.capabilities(),
         transport: TransportReport {
@@ -1210,7 +1210,10 @@ mod tests {
         assert_eq!(value["source"], "offline_mock_simulation_only");
         assert_eq!(value["mock_simulation"], true);
         assert_eq!(value["bluez_capability_discovery"], "not_performed");
-        assert_eq!(value["experimental_gatt_transport"], "not_implemented");
+        assert_eq!(
+            value["experimental_gatt_transport"],
+            "not_used_by_offline_mock"
+        );
         assert_eq!(value["hardware_watch_observations"], "not_run");
         assert_eq!(value["authorization"], "never_evaluated");
     }

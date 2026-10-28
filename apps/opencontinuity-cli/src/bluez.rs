@@ -7,9 +7,11 @@ use std::process::{Command, Stdio};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Evidence {
-    Verified,
+    Supported,
+    Unsupported,
     Unknown,
     Blocked,
+    NotTested,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -18,6 +20,7 @@ pub struct AdapterCapability {
     pub powered: Option<bool>,
     pub gatt_manager: Evidence,
     pub le_advertising_manager: Evidence,
+    pub controller_le_peripheral_capability: Evidence,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,7 +52,7 @@ pub fn inspect() -> BluezCapabilityReport {
             discovery: "blocked_non_linux_target",
             mock_simulation: false,
             bluez_capability_discovery: "blocked_non_linux_target",
-            experimental_gatt_transport: "not_implemented",
+            experimental_gatt_transport: "implemented_experimental",
             controller_le_peripheral_capability: "unknown_not_read_by_probe",
             bluez_version: None,
             adapters: Vec::new(),
@@ -74,14 +77,14 @@ fn inspect_linux() -> BluezCapabilityReport {
         "tree",
         "org.bluez",
     ]);
-    let Some(tree) = tree.filter(|output| output.status.success()) else {
+    let Some(tree_output) = tree else {
         return BluezCapabilityReport {
             schema_version: 1,
             source: "bluez_adapter_capability_discovery",
-            discovery: "bluez_service_or_system_bus_unavailable",
+            discovery: "system_bus_probe_unavailable",
             mock_simulation: false,
             bluez_capability_discovery: "attempted_but_unavailable",
-            experimental_gatt_transport: "not_implemented",
+            experimental_gatt_transport: "implemented_experimental",
             controller_le_peripheral_capability: "unknown_no_adapter_inspected",
             bluez_version,
             adapters: Vec::new(),
@@ -90,18 +93,34 @@ fn inspect_linux() -> BluezCapabilityReport {
             authorization: "never_evaluated",
         };
     };
+    if !tree_output.status.success() {
+        let discovery = classify_tree_error(&String::from_utf8_lossy(&tree_output.stderr));
+        let denied = discovery == "blocked_dbus_access";
+        return BluezCapabilityReport {
+            schema_version: 1,
+            source: "bluez_adapter_capability_discovery",
+            discovery,
+            mock_simulation: false,
+            bluez_capability_discovery: if denied {
+                "blocked"
+            } else {
+                "attempted_but_unavailable"
+            },
+            experimental_gatt_transport: "implemented_experimental",
+            controller_le_peripheral_capability: "unknown_no_adapter_inspected",
+            bluez_version,
+            adapters: Vec::new(),
+            hardware_watch_observations: "not_run",
+            authentication_test_outcome: "not_run",
+            authorization: "never_evaluated",
+        };
+    }
+    let tree = tree_output;
 
     let paths = String::from_utf8_lossy(&tree.stdout);
-    let adapters: Vec<_> = paths
-        .lines()
-        .filter_map(|line| {
-            let path = line.split_whitespace().find_map(|part| {
-                let start = part.find("/org/bluez/hci")?;
-                Some(&part[start..])
-            })?;
-            let suffix = path.strip_prefix("/org/bluez/")?;
-            (!suffix.contains('/')).then_some(path)
-        })
+    let adapters: Vec<_> = adapter_paths(&paths)
+        .iter()
+        .map(|path| path.as_str())
         .map(|path| {
             let introspection = run(&[
                 "busctl",
@@ -112,7 +131,15 @@ fn inspect_linux() -> BluezCapabilityReport {
                 "org.bluez",
                 path,
             ]);
+            let denied = introspection.as_ref().is_some_and(|output| {
+                let error = String::from_utf8_lossy(&output.stderr).to_lowercase();
+                !output.status.success()
+                    && (error.contains("accessdenied")
+                        || error.contains("access denied")
+                        || error.contains("permission denied"))
+            });
             let text = introspection
+                .as_ref()
                 .filter(|output| output.status.success())
                 .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
             let powered_output = run(&[
@@ -132,11 +159,13 @@ fn inspect_linux() -> BluezCapabilityReport {
             AdapterCapability {
                 object_path: path.to_owned(),
                 powered,
-                gatt_manager: interface_evidence(text.as_deref(), "org.bluez.GattManager1"),
+                gatt_manager: interface_evidence(text.as_deref(), "org.bluez.GattManager1", denied),
                 le_advertising_manager: interface_evidence(
                     text.as_deref(),
                     "org.bluez.LEAdvertisingManager1",
+                    denied,
                 ),
+                controller_le_peripheral_capability: Evidence::NotTested,
             }
         })
         .collect();
@@ -150,7 +179,7 @@ fn inspect_linux() -> BluezCapabilityReport {
         },
         mock_simulation: false,
         bluez_capability_discovery: "completed",
-        experimental_gatt_transport: "not_implemented",
+        experimental_gatt_transport: "implemented_experimental",
         controller_le_peripheral_capability: "unknown_not_read_by_probe",
         bluez_version,
         adapters,
@@ -170,12 +199,51 @@ fn run(args: &[&str]) -> Option<std::process::Output> {
         .ok()
 }
 
-fn interface_evidence(introspection: Option<&str>, interface: &str) -> Evidence {
+fn interface_evidence(introspection: Option<&str>, interface: &str, denied: bool) -> Evidence {
     match introspection {
-        Some(text) if text.contains(interface) => Evidence::Verified,
-        Some(_) => Evidence::Blocked,
+        Some(text) if text.contains(interface) => Evidence::Supported,
+        Some(_) => Evidence::Unsupported,
+        None if denied => Evidence::Blocked,
         None => Evidence::Unknown,
     }
+}
+
+fn classify_tree_error(stderr: &str) -> &'static str {
+    let error = stderr.to_lowercase();
+    if error.contains("accessdenied")
+        || error.contains("access denied")
+        || error.contains("permission denied")
+    {
+        "blocked_dbus_access"
+    } else if error.contains("failed to connect") || error.contains("no such file") {
+        "system_bus_unavailable"
+    } else if error.contains("serviceunknown")
+        || error.contains("not provided by any .service files")
+    {
+        "bluez_service_unavailable"
+    } else {
+        "bluez_probe_failed_unknown_reason"
+    }
+}
+
+fn adapter_paths(tree: &str) -> Vec<String> {
+    let mut paths = tree
+        .lines()
+        .filter_map(|line| {
+            let path = line
+                .split_whitespace()
+                .find(|part| part.starts_with("/org/bluez/"))?;
+            let adapter = path.strip_prefix("/org/bluez/")?;
+            (adapter.starts_with("hci")
+                && adapter[3..].bytes().all(|byte| byte.is_ascii_digit())
+                && adapter.len() > 3
+                && !adapter.contains('/'))
+            .then(|| path.to_owned())
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -193,34 +261,60 @@ mod tests {
     #[test]
     fn capability_parser_distinguishes_present_missing_and_unknown() {
         assert!(matches!(
-            interface_evidence(Some("org.bluez.GattManager1"), "org.bluez.GattManager1"),
-            Evidence::Verified
+            interface_evidence(
+                Some("org.bluez.GattManager1"),
+                "org.bluez.GattManager1",
+                false
+            ),
+            Evidence::Supported
         ));
         assert!(matches!(
-            interface_evidence(Some("org.bluez.Adapter1"), "org.bluez.GattManager1"),
-            Evidence::Blocked
+            interface_evidence(Some("org.bluez.Adapter1"), "org.bluez.GattManager1", false),
+            Evidence::Unsupported
         ));
         assert!(matches!(
-            interface_evidence(None, "org.bluez.GattManager1"),
+            interface_evidence(None, "org.bluez.GattManager1", false),
             Evidence::Unknown
         ));
+        assert!(matches!(
+            interface_evidence(None, "org.bluez.GattManager1", true),
+            Evidence::Blocked
+        ));
+        assert_eq!(
+            classify_tree_error("Failed to connect to system scope bus: No such file or directory"),
+            "system_bus_unavailable"
+        );
+        assert_eq!(
+            classify_tree_error(
+                "org.freedesktop.DBus.Error.ServiceUnknown: org.bluez is not provided by any .service files"
+            ),
+            "bluez_service_unavailable"
+        );
+        assert_eq!(
+            classify_tree_error("org.freedesktop.DBus.Error.AccessDenied: denied"),
+            "blocked_dbus_access"
+        );
         assert_eq!(parse_bool("b true"), Some(true));
         assert_eq!(parse_bool("b false"), Some(false));
         assert_eq!(parse_bool("invalid"), None);
     }
 
     #[test]
-    fn report_is_non_authorizing_and_does_not_claim_watch_observations() {
-        let report = inspect();
-        let value = serde_json::to_value(report).unwrap();
-        assert_eq!(value["authorization"], "never_evaluated");
-        assert_eq!(value["mock_simulation"], false);
-        assert_eq!(value["experimental_gatt_transport"], "not_implemented");
+    fn classifications_are_environment_independent() {
+        for status in [
+            Evidence::Supported,
+            Evidence::Unsupported,
+            Evidence::Unknown,
+            Evidence::Blocked,
+            Evidence::NotTested,
+        ] {
+            assert!(serde_json::to_string(&status).is_ok());
+        }
+        assert!(adapter_paths("").is_empty());
+        assert!(adapter_paths("garbled text /not-bluez/hci0 /org/bluez/hci0/dev_aa").is_empty());
         assert_eq!(
-            value["controller_le_peripheral_capability"],
-            "unknown_no_adapter_inspected"
+            adapter_paths("/org/bluez/hci1\n/org/bluez/hci0\n/org/bluez/hci1"),
+            ["/org/bluez/hci0", "/org/bluez/hci1"]
         );
-        assert_eq!(value["hardware_watch_observations"], "not_run");
-        assert_eq!(value["authentication_test_outcome"], "not_run");
     }
 }

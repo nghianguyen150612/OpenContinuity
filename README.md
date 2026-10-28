@@ -24,11 +24,12 @@ cargo run -p opencontinuity-cli -- doctor --json
 cargo run -p opencontinuity-cli -- research watch --fixture tests/fixtures/watch-discovery.json --json
 cargo run -p opencontinuity-cli -- research watch-endpoint --fixture tests/fixtures/watch-endpoint.json --json
 cargo run -p opencontinuity-cli -- research watch-ble --capabilities --json
+cargo run -p opencontinuity-cli -- research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental --json
 cargo run -p opencontinuityd -- --help
 cargo run -p opencontinuityd
 ```
 
-The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. `research watch` and `research watch-endpoint` use only local fixtures and deterministic mocks. `research watch-ble --capabilities` performs read-only BlueZ D-Bus object inspection when available; it does not scan, register GATT objects, advertise, pair, connect, authenticate, or unlock Linux. No Watch app, real GATT transport, or production enrollment exists. See [P004 feasibility](docs/research/P004_WATCH_BLE_GATT_SPIKE.md) and [validation](docs/P004_VALIDATION.md).
+The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. `research watch` and `research watch-endpoint` use only local fixtures and deterministic mocks. `research watch-ble --capabilities` remains read-only. `research watch-gatt serve` is a separate experimental command requiring explicit `--experimental`, an adapter, and a 1–300 second runtime; it temporarily registers a synthetic GATT service and advertisement, without powering on the adapter or authorizing Linux. This repository has no Apple Watch app, and real BlueZ/Watch communication is not claimed. See [P005 server](docs/research/P005_BLUEZ_GATT_SERVER.md), [wire contract](docs/research/P005_WIRE_CONTRACT.md), [security review](docs/research/P005_SECURITY_REVIEW.md), and [validation](docs/P005_VALIDATION.md).
 
 ## Architecture
 

@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod bluez_research;
+pub mod gatt_wire;
 pub mod research;
 pub mod watch_endpoint;
 

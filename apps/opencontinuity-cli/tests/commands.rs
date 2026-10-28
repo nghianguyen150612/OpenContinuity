@@ -127,16 +127,55 @@ fn watch_ble_capabilities_command_is_read_only_and_never_authorizes() {
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(report["source"], "bluez_adapter_capability_discovery");
     assert_eq!(report["mock_simulation"], false);
+    assert!(matches!(
+        report["bluez_capability_discovery"].as_str(),
+        Some("completed" | "attempted_but_unavailable" | "blocked" | "blocked_non_linux_target")
+    ));
     assert_eq!(
-        report["bluez_capability_discovery"],
-        "attempted_but_unavailable"
+        report["experimental_gatt_transport"],
+        "implemented_experimental"
     );
-    assert_eq!(report["experimental_gatt_transport"], "not_implemented");
-    assert_eq!(
-        report["controller_le_peripheral_capability"],
-        "unknown_no_adapter_inspected"
+    assert!(
+        report["controller_le_peripheral_capability"]
+            .as_str()
+            .unwrap()
+            .starts_with("unknown")
     );
     assert_eq!(report["hardware_watch_observations"], "not_run");
     assert_eq!(report["authentication_test_outcome"], "not_run");
     assert_eq!(report["authorization"], "never_evaluated");
+}
+
+#[test]
+fn watch_gatt_command_requires_explicit_opt_in_and_rejects_unbounded_duration() {
+    let binary = env!("CARGO_BIN_EXE_opencontinuity");
+    let implicit = Command::new(binary)
+        .args([
+            "research",
+            "watch-gatt",
+            "serve",
+            "--adapter",
+            "hci0",
+            "--duration-seconds",
+            "10",
+        ])
+        .output()
+        .unwrap();
+    assert!(!implicit.status.success());
+
+    let unbounded = Command::new(binary)
+        .args([
+            "research",
+            "watch-gatt",
+            "serve",
+            "--adapter",
+            "hci0",
+            "--duration-seconds",
+            "301",
+            "--experimental",
+        ])
+        .output()
+        .unwrap();
+    assert!(!unbounded.status.success());
+    assert!(String::from_utf8_lossy(&unbounded.stderr).contains("between 1 and 300"));
 }
