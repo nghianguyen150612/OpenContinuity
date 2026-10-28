@@ -1,5 +1,7 @@
 # P005 experimental GATT wire contract
 
+> Historical P005 contract: P006 changes session/result lifecycle and removes the pending status-1 response. The current contract is [P006 session hardening](P006_GATT_SESSION_HARDENING.md) and [Watch client contract](P006_WATCH_CLIENT_CONTRACT.md).
+
 Version 1 is a transport exercise only. All multi-byte integer fields are little-endian. The transport cannot authorize Linux.
 
 ## GATT characteristics

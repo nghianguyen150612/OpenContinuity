@@ -28,6 +28,10 @@ The original P001–P060 source remains unavailable, so P005 is a provisional co
 
 The original Qt6/QML Settings framework and production Bluetooth adapter scaffolding remain absent and unresolved. P004's read-only capability probe is not either deliverable.
 
+## P006 — BlueZ qualification and GATT lifecycle (provisional)
+
+Earlier planning grouped P001–P006 under Foundation + Settings, while P002–P005 followed a provisional Watch/BLE research track. The original roadmap was not recovered verbatim. P006 continues that implemented research track, not a verified original P006 scope; it does not complete the production adapter or Qt6/QML Settings framework. The phase-based synthetic server, read-only host qualification and Watch foreground contract are described in [P006 validation](P006_VALIDATION.md). Physical BlueZ and Watch SE 2 trials are NOT RUN. No Linux authorization is introduced.
+
 ## Priority order from the project brief
 
 1. Apple Watch SE 2 native Auto Unlock protocol research.

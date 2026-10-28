@@ -14,7 +14,7 @@ use std::{
 };
 use zbus::{
     DBusError,
-    blocking::{Proxy, connection::Builder},
+    blocking::{Connection, Proxy, connection::Builder},
     fdo::ObjectManager,
     message::Header,
     zvariant::{OwnedObjectPath, OwnedValue, Value},
@@ -39,17 +39,52 @@ enum FailureMode {
     NoGatt,
     NoAdvertisement,
     MissingAdvertisementOnCleanup,
+    CleanupFailure,
+    AdvertisementAndRollbackFailure,
+    SlowAdvertisement,
+}
+
+#[derive(Default)]
+struct SnapshotHook {
+    armed: bool,
+    hit: bool,
+    released: bool,
 }
 
 struct MockAdapter {
     powered: Arc<AtomicBool>,
+    snapshot_hook: Option<Arc<(Mutex<SnapshotHook>, std::sync::Condvar)>>,
+    probes: Arc<AtomicUsize>,
 }
 
 #[zbus::interface(name = "org.bluez.Adapter1")]
 impl MockAdapter {
     #[zbus(property)]
     fn powered(&self) -> bool {
+        self.probes.fetch_add(1, Ordering::Relaxed);
+        if let Some(hook) = &self.snapshot_hook {
+            let (lock, changed) = &**hook;
+            let mut state = lock.lock().unwrap();
+            if state.armed {
+                state.armed = false;
+                state.hit = true;
+                changed.notify_all();
+                let _ = changed
+                    .wait_timeout_while(state, Duration::from_secs(3), |state| !state.released)
+                    .unwrap();
+            }
+        }
         self.powered.load(Ordering::Relaxed)
+    }
+}
+
+struct MockDevice;
+
+#[zbus::interface(name = "org.bluez.Device1")]
+impl MockDevice {
+    #[zbus(property)]
+    fn connected(&self) -> bool {
+        true
     }
 }
 
@@ -81,8 +116,12 @@ impl MockGattManager {
         Ok(())
     }
 
-    fn unregister_application(&self, _application: OwnedObjectPath) {
+    fn unregister_application(&self, _application: OwnedObjectPath) -> Result<(), MockBluezError> {
         self.events.lock().unwrap().push("unregister_application");
+        if matches!(self.failure, FailureMode::AdvertisementAndRollbackFailure) {
+            return Err(MockBluezError::Failed("rollback failed".into()));
+        }
+        Ok(())
     }
 }
 
@@ -101,12 +140,18 @@ impl MockAdvertisingManager {
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(), MockBluezError> {
         self.events.lock().unwrap().push("register_advertisement");
+        if matches!(self.failure, FailureMode::SlowAdvertisement) {
+            thread::sleep(Duration::from_secs(3));
+        }
         let caller = header
             .sender()
             .ok_or_else(|| MockBluezError::Failed("missing D-Bus sender".into()))?
             .to_string();
         *self.advertisement_info.lock().unwrap() = Some((caller, advertisement.to_string()));
-        if matches!(self.failure, FailureMode::Advertisement) {
+        if matches!(
+            self.failure,
+            FailureMode::Advertisement | FailureMode::AdvertisementAndRollbackFailure
+        ) {
             return Err(MockBluezError::NotPermitted(
                 "mock advertising slots exhausted".into(),
             ));
@@ -119,6 +164,9 @@ impl MockAdvertisingManager {
         _advertisement: OwnedObjectPath,
     ) -> Result<(), MockBluezError> {
         self.events.lock().unwrap().push("unregister_advertisement");
+        if matches!(self.failure, FailureMode::CleanupFailure) {
+            return Err(MockBluezError::Failed("cleanup failed".into()));
+        }
         if matches!(self.failure, FailureMode::MissingAdvertisementOnCleanup) {
             return Err(MockBluezError::DoesNotExist(
                 "mock advertisement already removed by BlueZ".into(),
@@ -140,12 +188,15 @@ impl MockAdvertisingManager {
 
 struct PrivateBluez {
     daemon: Child,
+    service: Option<Connection>,
     _service_thread: thread::JoinHandle<()>,
     events: Arc<Mutex<Vec<&'static str>>>,
     app_object_count: Arc<AtomicUsize>,
     app_info: Arc<Mutex<Option<(String, String)>>>,
     advertisement_info: Arc<Mutex<Option<(String, String)>>>,
     powered: Arc<AtomicBool>,
+    snapshot_hook: Arc<(Mutex<SnapshotHook>, std::sync::Condvar)>,
+    probes: Arc<AtomicUsize>,
     other_events: Arc<Mutex<Vec<&'static str>>>,
     address: String,
     stop: Arc<AtomicBool>,
@@ -175,6 +226,13 @@ impl PrivateBluez {
         let service_advertisement_info = advertisement_info.clone();
         let powered = Arc::new(AtomicBool::new(true));
         let service_powered = powered.clone();
+        let snapshot_hook = Arc::new((
+            Mutex::new(SnapshotHook::default()),
+            std::sync::Condvar::new(),
+        ));
+        let service_snapshot_hook = snapshot_hook.clone();
+        let probes = Arc::new(AtomicUsize::new(0));
+        let service_probes = probes.clone();
         let service_address = address.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let service_stop = stop.clone();
@@ -203,6 +261,8 @@ impl PrivateBluez {
                         "/org/bluez/hci0",
                         MockAdapter {
                             powered: service_powered,
+                            snapshot_hook: Some(service_snapshot_hook),
+                            probes: service_probes,
                         },
                     )
                     .unwrap();
@@ -232,12 +292,17 @@ impl PrivateBluez {
                         )
                         .unwrap();
                 }
+                for path in ["/org/bluez/hci0/dev_01", "/org/bluez/hci0/dev_02"] {
+                    service.object_server().at(path, MockDevice).unwrap();
+                }
                 service
                     .object_server()
                     .at(
                         "/org/bluez/hci1",
                         MockAdapter {
                             powered: Arc::new(AtomicBool::new(true)),
+                            snapshot_hook: None,
+                            probes: Arc::new(AtomicUsize::new(0)),
                         },
                     )
                     .unwrap();
@@ -268,22 +333,25 @@ impl PrivateBluez {
                         .unwrap();
                 }
             }
-            ready_tx.send(()).unwrap();
+            ready_tx.send(service.clone()).unwrap();
             while !service_stop.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(10));
             }
         });
-        ready_rx
+        let service = ready_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("mock BlueZ service acquired its bus name");
         Self {
             daemon,
+            service: Some(service),
             _service_thread: service_thread,
             events,
             app_object_count,
             app_info,
             advertisement_info,
             powered,
+            snapshot_hook,
+            probes,
             other_events,
             address,
             stop,
@@ -382,10 +450,7 @@ impl PrivateBluez {
             thread::sleep(Duration::from_millis(10));
         }
         let (destination, application) = self.app_info.lock().unwrap().clone().unwrap();
-        let connection = Builder::address(self.address.as_str())
-            .unwrap()
-            .build()
-            .unwrap();
+        let connection = self.service.as_ref().unwrap().clone();
         let proxy = Proxy::new(
             &connection,
             destination.as_str(),
@@ -529,6 +594,10 @@ impl PrivateBluez {
                 .call("ReadValue", &read_options(Some(22)))
                 .unwrap(),
         );
+        let terminator: Vec<u8> = characteristic(characteristic_path(3))
+            .call("ReadValue", &read_options(Some(44)))
+            .unwrap();
+        assert!(terminator.is_empty());
         assert_eq!(response[0..2], [1, 0]);
         assert_eq!(response[2..10], session_id);
         assert_eq!(
@@ -772,4 +841,529 @@ fn cleanup_treats_an_already_removed_advertisement_as_idempotent() {
             "unregister_application"
         ]
     );
+}
+
+#[test]
+fn cleanup_failure_is_reported_and_application_cleanup_still_attempted() {
+    let mock = PrivateBluez::start(FailureMode::CleanupFailure);
+    let output = mock.run_cli(1);
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "stopping");
+    assert_eq!(report["shutdown_reason"], "timeout");
+    assert!(
+        report["cleanup_errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("advertisement unregister failed")
+    );
+    assert!(report["advertisement_registered"].as_bool().unwrap());
+    assert!(!report["application_registered"].as_bool().unwrap());
+    assert_eq!(
+        &*mock.events.lock().unwrap(),
+        &[
+            "register_application",
+            "register_advertisement",
+            "unregister_advertisement",
+            "unregister_application"
+        ]
+    );
+}
+
+#[test]
+fn rollback_failure_keeps_registration_failure_and_cleanup_details() {
+    let mock = PrivateBluez::start(FailureMode::AdvertisementAndRollbackFailure);
+    let output = mock.run_cli(2);
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "registering_advertisement");
+    assert!(
+        report["error"]
+            .as_str()
+            .unwrap()
+            .contains("advertisement registration failed")
+    );
+    assert!(
+        report["cleanup_errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("application unregister failed")
+    );
+}
+
+#[test]
+fn loss_of_bluez_owner_during_active_session_reports_failure_and_cleanup() {
+    let mut mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !mock
+        .events
+        .lock()
+        .unwrap()
+        .contains(&"register_advertisement")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        assert!(child.try_wait().unwrap().is_none());
+        thread::sleep(Duration::from_millis(10));
+    }
+    wait_for_active_probe(&mock, &mut child);
+    mock.stop.store(true, Ordering::Relaxed);
+    mock.service.take();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "active");
+    assert!(
+        report["error"].as_str().unwrap().contains("monitor")
+            || report["error"].as_str().unwrap().contains("owner lost")
+            || report["error"]
+                .as_str()
+                .unwrap()
+                .contains("D-Bus connection")
+    );
+    assert_eq!(report["application_registration_succeeded"], true);
+    assert_eq!(report["advertisement_registration_succeeded"], true);
+    assert!(!report["cleanup_errors"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn registration_timeout_is_bounded_and_attempts_rollback() {
+    let mock = PrivateBluez::start(FailureMode::SlowAdvertisement);
+    let start = std::time::Instant::now();
+    let output = mock.run_cli(10);
+    assert!(start.elapsed() < Duration::from_secs(8));
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "registering_advertisement");
+    assert!(report["error"].as_str().unwrap().contains("timed out"));
+    let events = mock.events.lock().unwrap();
+    assert!(events.contains(&"unregister_advertisement"));
+    assert!(events.contains(&"unregister_application"));
+}
+
+#[test]
+fn bus_loss_during_active_run_returns_original_error() {
+    let mut mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !mock
+        .events
+        .lock()
+        .unwrap()
+        .contains(&"register_advertisement")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        assert!(child.try_wait().unwrap().is_none());
+        thread::sleep(Duration::from_millis(10));
+    }
+    wait_for_active_probe(&mock, &mut child);
+    mock.daemon.kill().unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "active");
+    assert!(
+        report["error"].as_str().unwrap().contains("monitor")
+            || report["error"].as_str().unwrap().contains("owner lost")
+            || report["error"]
+                .as_str()
+                .unwrap()
+                .contains("D-Bus connection")
+    );
+    assert!(!report["cleanup_errors"].as_array().unwrap().is_empty());
+    assert_eq!(report["authorization"], "never_evaluated");
+}
+
+fn wait_for_registration(mock: &PrivateBluez, child: &mut Child) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !mock
+        .events
+        .lock()
+        .unwrap()
+        .contains(&"register_advertisement")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "registration timed out"
+        );
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "server exited before registration"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_for_active_probe(mock: &PrivateBluez, child: &mut Child) {
+    let count = mock.probes.load(Ordering::Relaxed);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while mock.probes.load(Ordering::Relaxed) <= count {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "active probe timed out"
+        );
+        assert!(child.try_wait().unwrap().is_none());
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn options(device: &str) -> std::collections::HashMap<String, OwnedValue> {
+    let mut options = std::collections::HashMap::new();
+    options.insert(
+        "device".into(),
+        OwnedValue::try_from(Value::from(OwnedObjectPath::try_from(device).unwrap())).unwrap(),
+    );
+    options.insert("mtu".into(), OwnedValue::from(517u16));
+    options
+}
+
+fn char_proxy(mock: &PrivateBluez, index: u8) -> Proxy<'static> {
+    let (destination, application) = mock.app_info.lock().unwrap().clone().unwrap();
+    Proxy::new_owned(
+        mock.service.as_ref().unwrap().clone(),
+        destination,
+        OwnedObjectPath::try_from(format!("{application}/service0/char{index}")).unwrap(),
+        "org.bluez.GattCharacteristic1".to_owned(),
+    )
+    .unwrap()
+}
+
+fn read_challenge(mock: &PrivateBluez, device: &str) -> [u8; 8] {
+    let challenge: Vec<u8> = char_proxy(mock, 1)
+        .call("ReadValue", &options(device))
+        .unwrap();
+    assert_eq!(challenge.len(), 25);
+    challenge[1..9].try_into().unwrap()
+}
+
+fn write_frame(mock: &PrivateBluez, device: &str, frame: Vec<u8>) -> Result<(), zbus::Error> {
+    char_proxy(mock, 2).call("WriteValue", &(frame, options(device)))
+}
+
+fn complete(mock: &PrivateBluez, device: &str, id: [u8; 8]) {
+    let frame = opencontinuity_core::gatt_wire::encode_frame(id, 0, true, true, 1, b"x").unwrap();
+    write_frame(mock, device, frame).unwrap();
+    let control = opencontinuity_core::gatt_wire::encode_control(
+        id,
+        opencontinuity_core::gatt_wire::ControlCommand::Complete,
+    );
+    char_proxy(mock, 4)
+        .call::<_, _, ()>("WriteValue", &(control.to_vec(), options(device)))
+        .unwrap();
+}
+
+fn connected_signal(mock: &PrivateBluez, device: &str, value: OwnedValue) {
+    let changed = std::collections::HashMap::from([("Connected".to_owned(), value)]);
+    mock.service
+        .as_ref()
+        .unwrap()
+        .emit_signal(
+            None::<&str>,
+            device,
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &("org.bluez.Device1", changed, Vec::<String>::new()),
+        )
+        .unwrap();
+}
+
+fn remove_device_signal(mock: &PrivateBluez, device: &str) {
+    mock.service
+        .as_ref()
+        .unwrap()
+        .emit_signal(
+            None::<&str>,
+            "/",
+            "org.freedesktop.DBus.ObjectManager",
+            "InterfacesRemoved",
+            &(
+                OwnedObjectPath::try_from(device).unwrap(),
+                vec!["org.bluez.Device1"],
+            ),
+        )
+        .unwrap();
+}
+
+#[test]
+fn rapid_reconnect_orders_signals_with_frames_and_isolates_other_clients() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    // Mock Device1 remains Connected=true in snapshots, so only the false
+    // signal can invalidate the session, even if a poll happens during the test.
+    let first = "/org/bluez/hci0/dev_01";
+    let second = "/org/bluez/hci0/dev_02";
+    let id1 = read_challenge(&mock, first);
+    let id2 = read_challenge(&mock, second);
+    let partial =
+        opencontinuity_core::gatt_wire::encode_frame(id1, 0, true, false, 2, b"x").unwrap();
+    write_frame(&mock, first, partial).unwrap();
+    complete(&mock, second, id2);
+    connected_signal(&mock, first, OwnedValue::from(false));
+    connected_signal(&mock, first, OwnedValue::from(true));
+    let continuation =
+        opencontinuity_core::gatt_wire::encode_frame(id1, 1, false, true, 0, b"y").unwrap();
+    assert!(write_frame(&mock, first, continuation).is_err());
+    let other_response: Vec<u8> = char_proxy(&mock, 3)
+        .call("ReadValue", &options(second))
+        .unwrap();
+    assert_eq!(&other_response[2..10], &id2);
+    let next = read_challenge(&mock, first);
+    assert_ne!(next, id1);
+    let replay = opencontinuity_core::gatt_wire::encode_frame(id1, 0, true, true, 1, b"x").unwrap();
+    assert!(write_frame(&mock, first, replay).is_err());
+    let error: Vec<u8> = char_proxy(&mock, 3)
+        .call("ReadValue", &options(first))
+        .unwrap();
+    assert_eq!(&error[2..10], &next);
+    let current = read_challenge(&mock, first);
+    complete(&mock, first, current);
+    connected_signal(&mock, first, OwnedValue::from(false));
+    connected_signal(&mock, first, OwnedValue::from(true));
+    assert!(
+        char_proxy(&mock, 3)
+            .call::<_, _, Vec<u8>>("ReadValue", &options(first))
+            .is_err()
+    );
+    assert_ne!(read_challenge(&mock, first), current);
+    let before_removal = read_challenge(&mock, second);
+    remove_device_signal(&mock, second);
+    assert_ne!(read_challenge(&mock, second), before_removal);
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(child.wait_with_output().unwrap().status.success());
+}
+
+#[test]
+fn malformed_signal_fails_closed_and_fresh_server_recovers() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    let device = "/org/bluez/hci0/dev_01";
+    let old = read_challenge(&mock, device);
+    connected_signal(&mock, device, OwnedValue::from(7u16));
+    assert!(
+        char_proxy(&mock, 1)
+            .call::<_, _, Vec<u8>>("ReadValue", &options(device))
+            .is_err()
+    );
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid Connected")
+    );
+    mock.events.lock().unwrap().clear();
+    let mut recovered = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut recovered);
+    assert_ne!(read_challenge(&mock, device), old);
+    let _ = Command::new("kill")
+        .args(["-TERM", &recovered.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(recovered.wait_with_output().unwrap().status.success());
+}
+
+#[test]
+fn bluez_owner_replacement_fails_closed_without_touching_new_owner() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    let device = "/org/bluez/hci0/dev_01";
+    let _ = read_challenge(&mock, device);
+    mock.service
+        .as_ref()
+        .unwrap()
+        .release_name("org.bluez")
+        .unwrap();
+    let replacement = Builder::address(mock.address.as_str())
+        .unwrap()
+        .name("org.bluez")
+        .unwrap()
+        .build()
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stage"], "active");
+    assert!(report["error"].as_str().unwrap().contains("owner"));
+    assert_eq!(
+        &*mock.events.lock().unwrap(),
+        &["register_application", "register_advertisement"]
+    );
+    drop(replacement);
+}
+
+#[test]
+fn signal_during_initial_snapshot_is_seen_before_registration() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let (lock, changed) = &*mock.snapshot_hook;
+    lock.lock().unwrap().armed = true;
+    let child = mock.spawn_cli(30);
+    let guard = lock.lock().unwrap();
+    let (mut guard, result) = changed
+        .wait_timeout_while(guard, Duration::from_secs(5), |state| !state.hit)
+        .unwrap();
+    assert!(!result.timed_out(), "snapshot did not query adapter");
+    connected_signal(&mock, "/org/bluez/hci0/dev_01", OwnedValue::from(7u16));
+    guard.released = true;
+    changed.notify_all();
+    drop(guard);
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid Connected")
+    );
+    assert!(mock.events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn concurrent_calls_cannot_bypass_a_queued_disconnect() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    let device = "/org/bluez/hci0/dev_01";
+    let id = read_challenge(&mock, device);
+    complete(&mock, device, id);
+    connected_signal(&mock, device, OwnedValue::from(false));
+    connected_signal(&mock, device, OwnedValue::from(true));
+    let response = char_proxy(&mock, 3);
+    let challenge = char_proxy(&mock, 1);
+    let read_response =
+        thread::spawn(move || response.call::<_, _, Vec<u8>>("ReadValue", &options(device)));
+    let read_new =
+        thread::spawn(move || challenge.call::<_, _, Vec<u8>>("ReadValue", &options(device)));
+    assert!(read_response.join().unwrap().is_err());
+    let fresh = read_new.join().unwrap().unwrap();
+    assert_ne!(&fresh[1..9], &id);
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(child.wait_with_output().unwrap().status.success());
+}
+
+#[test]
+fn adapter_removed_signal_fails_closed_and_clears_sessions() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    let _ = read_challenge(&mock, "/org/bluez/hci0/dev_01");
+    mock.service
+        .as_ref()
+        .unwrap()
+        .emit_signal(
+            None::<&str>,
+            "/",
+            "org.freedesktop.DBus.ObjectManager",
+            "InterfacesRemoved",
+            &(
+                OwnedObjectPath::try_from("/org/bluez/hci0").unwrap(),
+                vec!["org.bluez.Adapter1"],
+            ),
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["error"]
+            .as_str()
+            .unwrap()
+            .contains("adapter or manager removed")
+    );
+}
+
+#[test]
+fn unrelated_dbus_caller_cannot_impersonate_bluez_or_consume_a_session() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    let device = "/org/bluez/hci0/dev_01";
+    let id = read_challenge(&mock, device);
+    let (destination, application) = mock.app_info.lock().unwrap().clone().unwrap();
+    let outsider = Builder::address(mock.address.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let path = format!("{application}/service0/char1");
+    let proxy = Proxy::new(
+        &outsider,
+        destination.as_str(),
+        path.as_str(),
+        "org.bluez.GattCharacteristic1",
+    )
+    .unwrap();
+    assert!(
+        proxy
+            .call::<_, _, Vec<u8>>("ReadValue", &options(device))
+            .is_err()
+    );
+    assert_eq!(read_challenge(&mock, device), id);
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(child.wait_with_output().unwrap().status.success());
+}
+
+#[test]
+fn invalidated_connected_property_invalidates_the_session() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    let device = "/org/bluez/hci0/dev_01";
+    let old = read_challenge(&mock, device);
+    let changed = std::collections::HashMap::<String, OwnedValue>::new();
+    mock.service
+        .as_ref()
+        .unwrap()
+        .emit_signal(
+            None::<&str>,
+            device,
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &("org.bluez.Device1", changed, vec!["Connected"]),
+        )
+        .unwrap();
+    assert_ne!(read_challenge(&mock, device), old);
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(child.wait_with_output().unwrap().status.success());
+}
+
+#[test]
+fn malformed_gatt_call_trips_ordering_watchdog_and_server_fails_closed() {
+    let mock = PrivateBluez::start(FailureMode::None);
+    let mut child = mock.spawn_cli(30);
+    wait_for_registration(&mock, &mut child);
+    let device = "/org/bluez/hci0/dev_01";
+    let _ = read_challenge(&mock, device);
+    assert!(
+        char_proxy(&mock, 1)
+            .call::<_, _, Vec<u8>>("ReadValue", &("wrong signature",))
+            .is_err()
+    );
+    assert!(
+        char_proxy(&mock, 1)
+            .call::<_, _, Vec<u8>>("ReadValue", &options(device))
+            .is_err()
+    );
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = report["error"].as_str().unwrap();
+    assert!(error.contains("monitor"), "unexpected report: {report}");
+    assert_eq!(report["authorization"], "never_evaluated");
 }

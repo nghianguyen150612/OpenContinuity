@@ -19,6 +19,9 @@ pub struct ExperimentReport {
     pub shutdown_reason: Option<&'static str>,
     pub application_registered: bool,
     pub advertisement_registered: bool,
+    pub application_registration_succeeded: bool,
+    pub advertisement_registration_succeeded: bool,
+    pub cleanup_errors: Vec<String>,
     pub controller_le_peripheral_capability: &'static str,
     pub supported_advertising_instances: Option<u8>,
     pub active_advertising_instances: Option<u8>,
@@ -51,8 +54,10 @@ pub fn validate_options(adapter: &str, duration: u16, experimental: bool) -> Res
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use futures_lite::{FutureExt, StreamExt};
     use opencontinuity_core::gatt_wire::{
-        ControlCommand, FrameAssembler, FrameProgress, WIRE_VERSION, WireError,
+        ControlCommand, FrameAssembler, FrameProgress, MAX_ATT_MTU, MIN_ATT_MTU, WIRE_VERSION,
+        WireError,
     };
     use sha2::{Digest, Sha256};
     use std::{collections::HashMap, fs::File, io::Read, sync::Mutex, thread, time::Instant};
@@ -106,33 +111,52 @@ mod linux {
         }
     }
 
-    fn option_u16(options: &HashMap<String, OwnedValue>, key: &str) -> Option<u16> {
-        options
-            .get(key)
-            .and_then(|value| u16::try_from(value.clone()).ok())
+    const MAX_CLIENTS: usize = 16;
+    const MAX_DEVICE_PATH: usize = 128;
+    const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+    const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn option_u16(
+        options: &HashMap<String, OwnedValue>,
+        key: &str,
+        default: u16,
+    ) -> Result<u16, BluezGattError> {
+        match options.get(key) {
+            None => Ok(default),
+            Some(value) => u16::try_from(value.clone())
+                .map_err(|_| BluezGattError::InvalidArgs(format!("invalid {key} option"))),
+        }
     }
 
-    fn option_device(options: &HashMap<String, OwnedValue>) -> Option<String> {
-        options
+    fn option_device(options: &HashMap<String, OwnedValue>) -> Result<String, BluezGattError> {
+        let path = options
             .get("device")
             .and_then(|value| OwnedObjectPath::try_from(value.clone()).ok())
             .map(|path| path.to_string())
+            .ok_or_else(|| {
+                BluezGattError::InvalidArgs("missing or invalid device option".into())
+            })?;
+        if path.len() > MAX_DEVICE_PATH || !path.starts_with("/org/bluez/") {
+            return Err(BluezGattError::InvalidArgs("invalid device path".into()));
+        }
+        Ok(path)
     }
 
-    fn read_fragment(
-        value: &[u8],
+    fn read_options(
         options: &HashMap<String, OwnedValue>,
-    ) -> Result<Vec<u8>, BluezGattError> {
-        let offset = option_u16(options, "offset").unwrap_or(0) as usize;
+    ) -> Result<(usize, usize), BluezGattError> {
+        let offset = option_u16(options, "offset", 0)? as usize;
+        let mtu = option_u16(options, "mtu", 23)? as usize;
+        if !(MIN_ATT_MTU..=MAX_ATT_MTU).contains(&mtu) {
+            return Err(BluezGattError::InvalidArgs("invalid ATT MTU".into()));
+        }
+        Ok((offset, mtu))
+    }
+
+    fn read_fragment(value: &[u8], offset: usize, mtu: usize) -> Result<Vec<u8>, BluezGattError> {
         if offset > value.len() {
             return Err(BluezGattError::InvalidOffset(
                 "read offset exceeds value length".into(),
-            ));
-        }
-        let mtu = option_u16(options, "mtu").unwrap_or(23) as usize;
-        if mtu < 23 {
-            return Err(BluezGattError::Failed(
-                "BlueZ supplied an invalid ATT MTU".into(),
             ));
         }
         let end = (offset + mtu - 1).min(value.len());
@@ -145,11 +169,20 @@ mod linux {
         Ok(bytes)
     }
 
+    // Exactly one phase owns the assembler or result. A result keeps its original
+    // ID until its last read fragment is delivered; no new challenge is issued.
+    enum SessionPhase {
+        ChallengeIssued(FrameAssembler),
+        Receiving(FrameAssembler),
+        AwaitingCompletion(FrameAssembler),
+        ResponseAvailable { value: Vec<u8>, since: Instant },
+        Consumed,
+    }
+
     struct ClientSession {
         session_id: [u8; 8],
         challenge: [u8; 16],
-        assembler: FrameAssembler,
-        response: Option<Vec<u8>>,
+        phase: SessionPhase,
         last_activity: Instant,
     }
 
@@ -159,8 +192,7 @@ mod linux {
             Ok(Self {
                 session_id,
                 challenge: random_bytes()?,
-                assembler: FrameAssembler::new(session_id),
-                response: None,
+                phase: SessionPhase::ChallengeIssued(FrameAssembler::new(session_id)),
                 last_activity: Instant::now(),
             })
         }
@@ -194,18 +226,16 @@ mod linux {
             .concat()
         }
 
-        fn rotate(&mut self) -> Result<(), BluezGattError> {
-            let new_id = random_bytes().map_err(|error| {
-                BluezGattError::Failed(format!("operating-system random source failed: {error}"))
-            })?;
-            let new_challenge = random_bytes().map_err(|error| {
-                BluezGattError::Failed(format!("operating-system random source failed: {error}"))
-            })?;
-            self.session_id = new_id;
-            self.challenge = new_challenge;
-            self.assembler.reset(new_id);
-            self.last_activity = Instant::now();
-            Ok(())
+        fn respond(&mut self, value: Vec<u8>) {
+            self.phase = SessionPhase::ResponseAvailable {
+                value,
+                since: Instant::now(),
+            };
+        }
+
+        fn expired(&self, now: Instant) -> bool {
+            now.saturating_duration_since(self.last_activity) > IDLE_TIMEOUT
+                || matches!(&self.phase, SessionPhase::ResponseAvailable { since, .. } if now.saturating_duration_since(*since) > RESPONSE_TIMEOUT)
         }
     }
 
@@ -233,15 +263,31 @@ mod linux {
     }
 
     impl GattState {
-        fn ensure_client(&self, device: &str) -> Result<(), BluezGattError> {
+        fn client_value(
+            &self,
+            device: &str,
+            kind: CharacteristicKind,
+            offset: usize,
+            mtu: usize,
+        ) -> Result<Vec<u8>, BluezGattError> {
+            if kind == CharacteristicKind::Version {
+                return read_fragment(&[WIRE_VERSION], offset, mtu);
+            }
             let mut clients = self
                 .clients
                 .lock()
                 .map_err(|_| BluezGattError::Failed("GATT client state lock poisoned".into()))?;
-            let rotate = clients
-                .get(device)
-                .is_none_or(|session| session.last_activity.elapsed() > Duration::from_secs(30));
-            if rotate {
+            let now = Instant::now();
+            clients.retain(|_, session| !session.expired(now));
+            if kind == CharacteristicKind::Challenge
+                && offset == 0
+                && clients
+                    .get(device)
+                    .is_none_or(|s| matches!(s.phase, SessionPhase::Consumed))
+            {
+                if !clients.contains_key(device) && clients.len() >= MAX_CLIENTS {
+                    return Err(BluezGattError::NotPermitted("client limit reached".into()));
+                }
                 clients.insert(
                     device.to_owned(),
                     ClientSession::new().map_err(|error| {
@@ -251,37 +297,43 @@ mod linux {
                     })?,
                 );
             }
-            if let Some(session) = clients.get_mut(device) {
-                session.last_activity = Instant::now();
+            let session = clients
+                .get_mut(device)
+                .ok_or_else(|| BluezGattError::NotPermitted("read a new challenge first".into()))?;
+            let value = match kind {
+                CharacteristicKind::Challenge
+                    if matches!(
+                        session.phase,
+                        SessionPhase::ChallengeIssued(_)
+                            | SessionPhase::Receiving(_)
+                            | SessionPhase::AwaitingCompletion(_)
+                    ) =>
+                {
+                    session.challenge_bytes()
+                }
+                CharacteristicKind::Response => match &session.phase {
+                    SessionPhase::ResponseAvailable { value, .. } => value.clone(),
+                    _ => {
+                        return Err(BluezGattError::NotPermitted(
+                            "no synthetic response is available".into(),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(BluezGattError::NotPermitted(
+                        "characteristic is unavailable in this session phase".into(),
+                    ));
+                }
+            };
+            let fragment = read_fragment(&value, offset, mtu)?;
+            session.last_activity = now;
+            if kind == CharacteristicKind::Response
+                && offset + fragment.len() == value.len()
+                && fragment.len() < mtu - 1
+            {
+                session.phase = SessionPhase::Consumed;
             }
-            Ok(())
-        }
-
-        fn client_value(
-            &self,
-            device: &str,
-            kind: CharacteristicKind,
-        ) -> Result<Vec<u8>, BluezGattError> {
-            if kind == CharacteristicKind::Version {
-                return Ok(vec![WIRE_VERSION]);
-            }
-            self.ensure_client(device)?;
-            let mut clients = self
-                .clients
-                .lock()
-                .map_err(|_| BluezGattError::Failed("GATT client state lock poisoned".into()))?;
-            let session = clients.get_mut(device).expect("client was inserted");
-            session.last_activity = Instant::now();
-            match kind {
-                CharacteristicKind::Version => Ok(vec![WIRE_VERSION]),
-                CharacteristicKind::Challenge => Ok(session.challenge_bytes()),
-                CharacteristicKind::Response => session.response.clone().ok_or_else(|| {
-                    BluezGattError::NotPermitted("no synthetic response is available".into())
-                }),
-                _ => Err(BluezGattError::NotPermitted(
-                    "characteristic is not readable".into(),
-                )),
-            }
+            Ok(fragment)
         }
 
         fn write_exchange(
@@ -294,21 +346,39 @@ mod linux {
                 .clients
                 .lock()
                 .map_err(|_| BluezGattError::Failed("GATT client state lock poisoned".into()))?;
+            let now = Instant::now();
+            clients.retain(|_, session| !session.expired(now));
             let session = clients.get_mut(device).ok_or_else(|| {
                 BluezGattError::NotPermitted(
                     "read the challenge characteristic before writing".into(),
                 )
             })?;
-            session.last_activity = Instant::now();
-            match session.assembler.push(frame, mtu, Instant::now()) {
-                Ok(FrameProgress::Partial { .. }) => Ok(()),
-                Ok(FrameProgress::Complete(_payload)) => {
-                    session.response = Some(session.status_response(1, b"pending completion"));
+            let result = match &mut session.phase {
+                SessionPhase::ChallengeIssued(assembler) | SessionPhase::Receiving(assembler) => {
+                    assembler.push(frame, mtu, now)
+                }
+                _ => {
+                    return Err(BluezGattError::NotPermitted(
+                        "exchange unavailable in this session phase".into(),
+                    ));
+                }
+            };
+            session.last_activity = now;
+            match result {
+                Ok(progress) => {
+                    let old = std::mem::replace(&mut session.phase, SessionPhase::Consumed);
+                    let assembler = match old {
+                        SessionPhase::ChallengeIssued(a) | SessionPhase::Receiving(a) => a,
+                        _ => unreachable!(),
+                    };
+                    session.phase = match progress {
+                        FrameProgress::Partial { .. } => SessionPhase::Receiving(assembler),
+                        FrameProgress::Complete(_) => SessionPhase::AwaitingCompletion(assembler),
+                    };
                     Ok(())
                 }
                 Err(error) => {
-                    session.response = Some(session.error_response(error));
-                    session.rotate()?;
+                    session.respond(session.error_response(error));
                     Err(as_bluez_error(error))
                 }
             }
@@ -319,40 +389,58 @@ mod linux {
                 .clients
                 .lock()
                 .map_err(|_| BluezGattError::Failed("GATT client state lock poisoned".into()))?;
+            let now = Instant::now();
+            clients.retain(|_, session| !session.expired(now));
             let session = clients.get_mut(device).ok_or_else(|| {
                 BluezGattError::NotPermitted(
                     "read the challenge characteristic before writing".into(),
                 )
             })?;
-            session.last_activity = Instant::now();
-            let command = match session.assembler.check_control(value) {
-                Ok(command) => command,
-                Err(error) => {
-                    session.response = Some(session.error_response(error));
-                    return Err(as_bluez_error(error));
+            let (command, payload) = match &session.phase {
+                SessionPhase::ChallengeIssued(a)
+                | SessionPhase::Receiving(a)
+                | SessionPhase::AwaitingCompletion(a) => {
+                    if a.partial_expired(now) {
+                        (Err(WireError::PartialMessageExpired), None)
+                    } else {
+                        (
+                            a.check_control(value),
+                            a.completed_payload().map(ToOwned::to_owned),
+                        )
+                    }
+                }
+                _ => {
+                    return Err(BluezGattError::NotPermitted(
+                        "control unavailable in this session phase".into(),
+                    ));
                 }
             };
+            session.last_activity = now;
             match command {
-                ControlCommand::Complete => {
-                    let payload = session
-                        .assembler
-                        .completed_payload()
-                        .ok_or_else(|| {
-                            BluezGattError::NotPermitted(
-                                "no complete synthetic payload is awaiting acknowledgement".into(),
-                            )
-                        })?
-                        .to_vec();
-                    session.response = Some(session.status_response(0, &payload));
-                    session.rotate()?;
+                Ok(ControlCommand::Complete) => {
+                    session.respond(session.status_response(
+                        0,
+                        payload.as_deref().expect("complete requires payload"),
+                    ));
                     Ok(())
                 }
-                ControlCommand::Cancel => {
-                    session.response = Some(session.status_response(2, b"cancelled"));
-                    session.rotate()?;
+                Ok(ControlCommand::Cancel) => {
+                    session.respond(session.status_response(2, b"cancelled"));
                     Ok(())
+                }
+                Err(error) => {
+                    session.respond(session.error_response(error));
+                    Err(as_bluez_error(error))
                 }
             }
+        }
+
+        fn invalidate(&self, device: &str) -> Result<(), String> {
+            self.clients
+                .lock()
+                .map_err(|_| "GATT client state lock poisoned".to_owned())?
+                .remove(device);
+            Ok(())
         }
 
         fn prune_devices(&self, connected: &HashMap<String, bool>) -> Result<(), String> {
@@ -360,11 +448,371 @@ mod linux {
                 .clients
                 .lock()
                 .map_err(|_| "GATT client state lock poisoned".to_owned())?;
+            let now = Instant::now();
             clients.retain(|device, session| {
-                connected.get(device).copied().unwrap_or(false)
-                    && session.last_activity.elapsed() <= Duration::from_secs(30)
+                connected.get(device).copied().unwrap_or(false) && !session.expired(now)
             });
             Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CallKey {
+        sender: String,
+        serial: u32,
+    }
+
+    fn call_key(header: &zbus::message::Header<'_>) -> Option<CallKey> {
+        Some(CallKey {
+            sender: header.sender()?.to_string(),
+            serial: header.primary().serial_num().get(),
+        })
+    }
+
+    #[derive(Default)]
+    struct GateInner {
+        healthy: bool,
+        current: Option<CallKey>,
+        done: bool,
+        claimed: bool,
+        reason: Option<String>,
+    }
+
+    struct MonitorGate {
+        owner: String,
+        inner: Mutex<GateInner>,
+        changed: std::sync::Condvar,
+    }
+
+    impl MonitorGate {
+        fn new(owner: &str) -> Self {
+            Self {
+                owner: owner.to_owned(),
+                inner: Mutex::new(GateInner::default()),
+                changed: std::sync::Condvar::new(),
+            }
+        }
+
+        fn fail(&self, state: &GattState, reason: impl Into<String>) {
+            // Close the gate before clearing state: no later GATT operation can
+            // begin, even if the stream dies while an earlier operation runs.
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.healthy = false;
+                if inner.reason.is_none() {
+                    inner.reason = Some(reason.into());
+                }
+                self.changed.notify_all();
+            }
+            if let Ok(mut clients) = state.clients.lock() {
+                clients.clear();
+            }
+        }
+
+        fn with_live<T>(
+            &self,
+            operation: impl FnOnce() -> Result<T, BluezGattError>,
+        ) -> Result<T, BluezGattError> {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| BluezGattError::Failed("monitor gate poisoned".into()))?;
+            if !inner.healthy {
+                return Err(BluezGattError::Failed(
+                    "disconnect monitor unavailable".into(),
+                ));
+            }
+            // Keep the gate locked until the state operation is finished, so a
+            // concurrent failure cannot clear state before an admitted call uses it.
+            let result = operation();
+            drop(inner);
+            result
+        }
+
+        fn healthy(&self) -> Result<(), String> {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| "monitor gate poisoned".to_owned())?;
+            if inner.healthy {
+                Ok(())
+            } else {
+                Err(inner
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "monitor stopped".into()))
+            }
+        }
+
+        async fn begin<'a>(
+            &'a self,
+            header: &zbus::message::Header<'_>,
+            state: &GattState,
+        ) -> Result<CallPermit<'a>, BluezGattError> {
+            let key = call_key(header)
+                .ok_or_else(|| BluezGattError::Failed("missing method call identity".into()))?;
+            if key.sender != self.owner {
+                return Err(BluezGattError::NotAuthorized(
+                    "only the registered BlueZ owner may invoke GATT methods".into(),
+                ));
+            }
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                {
+                    let mut inner = self
+                        .inner
+                        .lock()
+                        .map_err(|_| BluezGattError::Failed("monitor gate poisoned".into()))?;
+                    if !inner.healthy {
+                        return Err(BluezGattError::Failed(
+                            "disconnect monitor unavailable".into(),
+                        ));
+                    }
+                    if inner.current.as_ref() == Some(&key) && !inner.claimed {
+                        inner.claimed = true;
+                        return Ok(CallPermit { gate: self });
+                    }
+                }
+                if Instant::now() >= deadline {
+                    self.fail(state, "disconnect monitor did not order the request");
+                    return Err(BluezGattError::Failed(
+                        "disconnect monitor did not order the request".into(),
+                    ));
+                }
+                // Do not block zbus's executor while an earlier handler awaits its turn.
+                async_io::Timer::after(Duration::from_millis(2)).await;
+            }
+        }
+
+        fn order_call(&self, key: CallKey) -> Result<(), String> {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "monitor gate poisoned".to_owned())?;
+            if !inner.healthy {
+                return Err("monitor stopped".into());
+            }
+            inner.current = Some(key);
+            inner.done = false;
+            inner.claimed = false;
+            self.changed.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while inner.healthy && !inner.done {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("GATT call did not finish within monitor deadline".into());
+                }
+                let (next, _) = self
+                    .changed
+                    .wait_timeout(inner, remaining)
+                    .map_err(|_| "monitor gate poisoned".to_owned())?;
+                inner = next;
+            }
+            inner.current = None;
+            if inner.healthy {
+                Ok(())
+            } else {
+                Err("monitor stopped".into())
+            }
+        }
+    }
+
+    struct CallPermit<'a> {
+        gate: &'a MonitorGate,
+    }
+    impl Drop for CallPermit<'_> {
+        fn drop(&mut self) {
+            if let Ok(mut inner) = self.gate.inner.lock() {
+                inner.done = true;
+                self.gate.changed.notify_all();
+            }
+        }
+    }
+
+    struct SignalMonitor {
+        gate: Arc<MonitorGate>,
+        state: Arc<GattState>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl SignalMonitor {
+        fn start(
+            connection: &Connection,
+            owner: &str,
+            adapter_path: &str,
+            app_path: &str,
+            state: Arc<GattState>,
+        ) -> Result<Self, String> {
+            // The unfiltered stream includes both signals and addressed method calls,
+            // in the same receive order. Install all bus matches before snapshot.
+            let mut messages = zbus::blocking::MessageIterator::from(connection).into_inner();
+            let bus = Proxy::new(
+                connection,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+            )
+            .map_err(|e| e.to_string())?;
+            let rules = [
+                format!("type='signal',sender='{owner}',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path_namespace='{adapter_path}'"),
+                format!("type='signal',sender='{owner}',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesRemoved',path='/'"),
+                "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.bluez'".to_owned(),
+            ];
+            for rule in rules {
+                bus.call::<_, _, ()>("AddMatch", &(rule,))
+                    .map_err(|e| format!("signal subscription failed: {e}"))?;
+            }
+            let gate = Arc::new(MonitorGate::new(owner));
+            gate.inner
+                .lock()
+                .map_err(|_| "monitor gate poisoned".to_owned())?
+                .healthy = true;
+            let worker_gate = gate.clone();
+            let worker_state = state.clone();
+            let owner = owner.to_owned();
+            let adapter_path = adapter_path.to_owned();
+            let app_path = app_path.to_owned();
+            let thread = thread::Builder::new()
+                .name("bluez-session-monitor".into())
+                .spawn(move || {
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                        || -> Result<(), String> {
+                            loop {
+                                let event = futures_lite::future::block_on(async {
+                                    async { Some(messages.next().await) }
+                                        .or(async {
+                                            async_io::Timer::after(Duration::from_millis(100))
+                                                .await;
+                                            None
+                                        })
+                                        .await
+                                });
+                                if worker_gate.healthy().is_err() {
+                                    return Ok(());
+                                }
+                                let Some(event) = event else {
+                                    continue;
+                                };
+                                let message = event
+                                    .ok_or_else(|| "D-Bus monitor stream ended".to_owned())?
+                                    .map_err(|e| format!("D-Bus monitor stream failed: {e}"))?;
+                                let header = message.header();
+                                let path = header.path().map(|p| p.as_str()).unwrap_or("");
+                                let interface =
+                                    header.interface().map(|i| i.as_str()).unwrap_or("");
+                                let member = header.member().map(|m| m.as_str()).unwrap_or("");
+                                if header.message_type() == zbus::message::Type::MethodCall
+                                    && path.starts_with(&format!("{app_path}/service0/char"))
+                                    && interface == "org.bluez.GattCharacteristic1"
+                                    && matches!(member, "ReadValue" | "WriteValue")
+                                {
+                                    let key = call_key(&header)
+                                        .ok_or_else(|| "GATT call without sender".to_owned())?;
+                                    if key.sender == owner {
+                                        worker_gate.order_call(key)?;
+                                    }
+                                } else if header.message_type() == zbus::message::Type::Signal {
+                                    let sender = header.sender().map(|s| s.as_str()).unwrap_or("");
+                                    if sender == owner
+                                        && interface == "org.freedesktop.DBus.Properties"
+                                        && member == "PropertiesChanged"
+                                        && (path == adapter_path
+                                            || path.starts_with(&format!("{adapter_path}/")))
+                                    {
+                                        let (name, changed, invalidated): (
+                                            String,
+                                            HashMap<String, OwnedValue>,
+                                            Vec<String>,
+                                        ) = message.body().deserialize().map_err(|e| {
+                                            format!("malformed PropertiesChanged: {e}")
+                                        })?;
+                                        if name == ADAPTER && path == adapter_path {
+                                            if invalidated.iter().any(|s| s == "Powered") {
+                                                return Err(
+                                                    "adapter power state invalidated".into()
+                                                );
+                                            }
+                                            if let Some(value) = changed.get("Powered") {
+                                                if !bool::try_from(value.clone()).map_err(|_| {
+                                                    "invalid Powered property".to_owned()
+                                                })? {
+                                                    return Err("adapter powered off".into());
+                                                }
+                                            }
+                                        }
+                                        if name == "org.bluez.Device1" && path != adapter_path {
+                                            if invalidated.iter().any(|s| s == "Connected") {
+                                                worker_state.invalidate(path)?;
+                                            }
+                                            if let Some(value) = changed.get("Connected") {
+                                                if !bool::try_from(value.clone()).map_err(|_| {
+                                                    "invalid Connected property".to_owned()
+                                                })? {
+                                                    worker_state.invalidate(path)?;
+                                                }
+                                            }
+                                        }
+                                    } else if sender == owner
+                                        && interface == "org.freedesktop.DBus.ObjectManager"
+                                        && member == "InterfacesRemoved"
+                                    {
+                                        let (removed, interfaces): (OwnedObjectPath, Vec<String>) =
+                                            message.body().deserialize().map_err(|e| {
+                                                format!("malformed InterfacesRemoved: {e}")
+                                            })?;
+                                        let removed = removed.as_str();
+                                        if removed == adapter_path
+                                            && interfaces.iter().any(|i| {
+                                                matches!(
+                                                    i.as_str(),
+                                                    ADAPTER | GATT_MANAGER | ADVERTISING_MANAGER
+                                                )
+                                            })
+                                        {
+                                            return Err("adapter or manager removed".into());
+                                        }
+                                        if removed.starts_with(&format!("{adapter_path}/"))
+                                            && interfaces.iter().any(|i| i == "org.bluez.Device1")
+                                        {
+                                            worker_state.invalidate(removed)?;
+                                        }
+                                    } else if interface == "org.freedesktop.DBus"
+                                        && member == "NameOwnerChanged"
+                                        && sender == "org.freedesktop.DBus"
+                                    {
+                                        let (name, old, new): (String, String, String) =
+                                            message.body().deserialize().map_err(|e| {
+                                                format!("malformed NameOwnerChanged: {e}")
+                                            })?;
+                                        if name == BLUEZ && old == owner && new != owner {
+                                            return Err("BlueZ owner changed".into());
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    ));
+                    let reason = match outcome {
+                        Ok(Ok(())) => "monitor stopped".into(),
+                        Ok(Err(error)) => error,
+                        Err(_) => "monitor thread panicked".into(),
+                    };
+                    worker_gate.fail(&worker_state, reason);
+                })
+                .map_err(|e| format!("could not start signal monitor: {e}"))?;
+            Ok(Self {
+                gate,
+                state,
+                thread: Some(thread),
+            })
+        }
+    }
+
+    impl Drop for SignalMonitor {
+        fn drop(&mut self) {
+            self.gate.fail(&self.state, "monitor stopping");
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
         }
     }
 
@@ -408,6 +856,7 @@ mod linux {
         flags: Vec<String>,
         kind: CharacteristicKind,
         state: Arc<GattState>,
+        gate: Arc<MonitorGate>,
     }
 
     #[zbus::interface(name = "org.bluez.GattCharacteristic1")]
@@ -427,33 +876,58 @@ mod linux {
             self.flags.clone()
         }
 
-        fn read_value(
+        async fn read_value(
             &self,
             options: HashMap<String, OwnedValue>,
+            #[zbus(header)] header: zbus::message::Header<'_>,
         ) -> Result<Vec<u8>, BluezGattError> {
-            let device = option_device(&options).ok_or_else(|| {
-                BluezGattError::NotPermitted("BlueZ did not provide the connected device".into())
-            })?;
-            let value = self.state.client_value(&device, self.kind)?;
-            read_fragment(&value, &options)
+            let _permit = self.gate.begin(&header, &self.state).await?;
+            let device = option_device(&options)?;
+            let (offset, mtu) = read_options(&options)?;
+            self.gate
+                .with_live(|| self.state.client_value(&device, self.kind, offset, mtu))
         }
 
-        fn write_value(
+        async fn write_value(
             &self,
             value: Vec<u8>,
             options: HashMap<String, OwnedValue>,
+            #[zbus(header)] header: zbus::message::Header<'_>,
         ) -> Result<(), BluezGattError> {
-            let device = option_device(&options).ok_or_else(|| {
-                BluezGattError::NotPermitted("BlueZ did not provide the connected device".into())
-            })?;
-            let mtu = option_u16(&options, "mtu").unwrap_or(23) as usize;
-            match self.kind {
+            let _permit = self.gate.begin(&header, &self.state).await?;
+            let device = option_device(&options)?;
+            let (offset, mtu) = read_options(&options)?;
+            if offset != 0 || value.len() > mtu - 3 {
+                return Err(BluezGattError::InvalidValueLength(
+                    "invalid write offset or length".into(),
+                ));
+            }
+            if let Some(value) = options.get("type") {
+                let write_type = String::try_from(value.clone())
+                    .map_err(|_| BluezGattError::InvalidArgs("invalid write type".into()))?;
+                if write_type != "request" {
+                    return Err(BluezGattError::NotPermitted(
+                        "only write requests are supported".into(),
+                    ));
+                }
+            }
+            if let Some(value) = options.get("prepare-authorize") {
+                let prepared = bool::try_from(value.clone()).map_err(|_| {
+                    BluezGattError::InvalidArgs("invalid prepare-authorize option".into())
+                })?;
+                if prepared {
+                    return Err(BluezGattError::NotPermitted(
+                        "prepared writes are unsupported".into(),
+                    ));
+                }
+            }
+            self.gate.with_live(|| match self.kind {
                 CharacteristicKind::Exchange => self.state.write_exchange(&device, &value, mtu),
                 CharacteristicKind::Control => self.state.write_control(&device, &value),
                 _ => Err(BluezGattError::NotPermitted(
                     "characteristic is read-only".into(),
                 )),
-            }
+            })
         }
     }
 
@@ -479,9 +953,22 @@ mod linux {
         fn release(&self) {}
     }
 
-    fn managed_objects(connection: &Connection) -> Result<zbus::fdo::ManagedObjects, zbus::Error> {
-        let proxy = Proxy::new(connection, BLUEZ, "/", OM)?;
+    fn managed_objects(
+        connection: &Connection,
+        owner: &str,
+    ) -> Result<zbus::fdo::ManagedObjects, zbus::Error> {
+        let proxy = Proxy::new(connection, owner, "/", OM)?;
         proxy.call("GetManagedObjects", &())
+    }
+
+    fn bluez_owner(connection: &Connection) -> Result<String, zbus::Error> {
+        let proxy = Proxy::new(
+            connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )?;
+        proxy.call("GetNameOwner", &(BLUEZ,))
     }
 
     fn has_interface(objects: &zbus::fdo::ManagedObjects, path: &str, interface: &str) -> bool {
@@ -535,12 +1022,13 @@ mod linux {
 
     fn call_manager(
         connection: &Connection,
+        owner: &str,
         path: &str,
         interface: &str,
         method: &str,
         object: &str,
     ) -> Result<(), zbus::Error> {
-        let proxy = Proxy::new(connection, BLUEZ, path, interface)?;
+        let proxy = Proxy::new(connection, owner, path, interface)?;
         let object_path = OwnedObjectPath::try_from(object).map_err(zbus::Error::from)?;
         let options: HashMap<String, OwnedValue> = HashMap::new();
         if method.starts_with("Unregister") {
@@ -557,14 +1045,25 @@ mod linux {
         ad_path: String,
         app_registered: bool,
         ad_registered: bool,
+        owner: String,
     }
 
     impl Registration {
         fn cleanup(&mut self) -> Vec<String> {
             let mut errors = Vec::new();
+            // A restarted BlueZ owns no registrations from the old connection.
+            // Do not send unregister requests to its replacement owner.
+            if let Ok(owner) = bluez_owner(&self.connection) {
+                if owner != self.owner {
+                    self.ad_registered = false;
+                    self.app_registered = false;
+                    return errors;
+                }
+            }
             if self.ad_registered {
                 match call_manager(
                     &self.connection,
+                    &self.owner,
                     &self.adapter_path,
                     ADVERTISING_MANAGER,
                     "UnregisterAdvertisement",
@@ -580,7 +1079,7 @@ mod linux {
             if self.app_registered {
                 let proxy = Proxy::new(
                     &self.connection,
-                    BLUEZ,
+                    self.owner.as_str(),
                     self.adapter_path.as_str(),
                     GATT_MANAGER,
                 );
@@ -600,12 +1099,6 @@ mod linux {
                 }
             }
             errors
-        }
-    }
-
-    impl Drop for Registration {
-        fn drop(&mut self) {
-            let _ = self.cleanup();
         }
     }
 
@@ -665,6 +1158,7 @@ mod linux {
             Some("system_bus_unavailable")
         } else if error_lower.contains("org.bluez is not provided")
             || error_lower.contains("serviceunknown")
+            || error_lower.contains("namehasnoowner")
         {
             Some("bluez_service_unavailable")
         } else {
@@ -679,6 +1173,9 @@ mod linux {
                 shutdown_reason: None,
                 application_registered: false,
                 advertisement_registered: false,
+                application_registration_succeeded: false,
+                advertisement_registration_succeeded: false,
+                cleanup_errors: Vec::new(),
                 controller_le_peripheral_capability: "unknown",
                 supported_advertising_instances: None,
                 active_advertising_instances: None,
@@ -694,15 +1191,62 @@ mod linux {
         duration: u16,
         terminate: Arc<AtomicBool>,
     ) -> Result<ExperimentReport, ExperimentError> {
-        let connection = Connection::system().map_err(|error| {
+        let connection = zbus::blocking::connection::Builder::system()
+            .and_then(|builder| builder.method_timeout(Duration::from_secs(2)).build())
+            .map_err(|error| {
+                err_report(
+                    adapter,
+                    duration,
+                    "preflight",
+                    format!("system D-Bus unavailable: {error}"),
+                )
+            })?;
+        let owner = bluez_owner(&connection).map_err(|error| {
             err_report(
                 adapter,
                 duration,
                 "preflight",
-                format!("system D-Bus unavailable: {error}"),
+                format!("BlueZ owner unavailable: {error}"),
             )
         })?;
-        let objects = managed_objects(&connection).map_err(|error| {
+        let adapter_path = format!("/org/bluez/{adapter}");
+        let nonce = random_bytes::<8>().map_err(|error| {
+            err_report(
+                adapter,
+                duration,
+                "preflight",
+                format!("OS random source unavailable: {error}"),
+            )
+        })?;
+        let mut token = String::with_capacity(16);
+        for byte in nonce {
+            use std::fmt::Write as _;
+            write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        let app_path = format!("/org/opencontinuity/gatt_{token}");
+        let ad_path = format!("/org/opencontinuity/advertisement_{token}");
+        let service_path = format!("{app_path}/service0");
+        let state = Arc::new(GattState::default());
+        let monitor =
+            SignalMonitor::start(&connection, &owner, &adapter_path, &app_path, state.clone())
+                .map_err(|error| err_report(adapter, duration, "preflight", error))?;
+        let current_owner = bluez_owner(&connection).map_err(|error| {
+            err_report(
+                adapter,
+                duration,
+                "preflight",
+                format!("BlueZ owner unavailable after subscription: {error}"),
+            )
+        })?;
+        if current_owner != owner {
+            return Err(err_report(
+                adapter,
+                duration,
+                "preflight",
+                "BlueZ owner changed during subscription",
+            ));
+        }
+        let objects = managed_objects(&connection, &owner).map_err(|error| {
             err_report(
                 adapter,
                 duration,
@@ -710,7 +1254,10 @@ mod linux {
                 format!("BlueZ discovery {}: {error}", classify_dbus_error(&error)),
             )
         })?;
-        let adapter_path = format!("/org/bluez/{adapter}");
+        monitor
+            .gate
+            .healthy()
+            .map_err(|error| err_report(adapter, duration, "preflight", error))?;
         if !objects
             .contains_key(&ObjectPath::try_from(adapter_path.as_str()).expect("valid adapter path"))
         {
@@ -748,23 +1295,6 @@ mod linux {
         let supported_instances = manager_capability(&objects, &adapter_path, "SupportedInstances");
         let active_instances = manager_capability(&objects, &adapter_path, "ActiveInstances");
 
-        let nonce = random_bytes::<8>().map_err(|error| {
-            err_report(
-                adapter,
-                duration,
-                "preflight",
-                format!("OS random source unavailable: {error}"),
-            )
-        })?;
-        let mut token = String::with_capacity(16);
-        for byte in nonce {
-            use std::fmt::Write as _;
-            write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
-        }
-        let app_path = format!("/org/opencontinuity/gatt_{token}");
-        let ad_path = format!("/org/opencontinuity/advertisement_{token}");
-        let service_path = format!("{app_path}/service0");
-        let state = Arc::new(GattState::default());
         let specs = [
             (
                 "char0",
@@ -842,6 +1372,7 @@ mod linux {
                         flags: flags.clone(),
                         kind: *kind,
                         state: state.clone(),
+                        gate: monitor.gate.clone(),
                     },
                 )
                 .map_err(|error| {
@@ -875,67 +1406,128 @@ mod linux {
             ad_path: ad_path.clone(),
             app_registered: false,
             ad_registered: false,
+            owner: owner.clone(),
         };
         let app_object = OwnedObjectPath::try_from(app_path.as_str()).expect("validated path");
         let options: HashMap<String, OwnedValue> = HashMap::new();
-        let manager = Proxy::new(&connection, BLUEZ, adapter_path.as_str(), GATT_MANAGER).map_err(
-            |error| {
-                err_report(
-                    adapter,
-                    duration,
-                    "registering_application",
-                    format!("{}: {error}", classify_dbus_error(&error)),
-                )
-            },
-        )?;
-        manager
-            .call::<_, _, ()>("RegisterApplication", &(app_object, options))
-            .map_err(|error| {
-                err_report(
-                    adapter,
-                    duration,
-                    "registering_application",
-                    format!(
-                        "BlueZ GATT application registration failed ({}): {error}",
-                        classify_dbus_error(&error)
-                    ),
-                )
-            })?;
+        let manager = Proxy::new(
+            &connection,
+            owner.as_str(),
+            adapter_path.as_str(),
+            GATT_MANAGER,
+        )
+        .map_err(|error| {
+            err_report(
+                adapter,
+                duration,
+                "registering_application",
+                format!("{}: {error}", classify_dbus_error(&error)),
+            )
+        })?;
+        monitor
+            .gate
+            .healthy()
+            .map_err(|error| err_report(adapter, duration, "preflight", error))?;
+        if let Err(error) = manager.call::<_, _, ()>("RegisterApplication", &(app_object, options))
+        {
+            // A timed-out call may have registered despite its missing reply.
+            if matches!(error, zbus::Error::InputOutput(_) | zbus::Error::Failure(_)) {
+                registration.app_registered = true;
+            }
+            let cleanup = registration.cleanup();
+            let mut failure = err_report(
+                adapter,
+                duration,
+                "registering_application",
+                format!(
+                    "BlueZ GATT application registration failed ({}): {error}",
+                    classify_dbus_error(&error)
+                ),
+            );
+            failure.report.cleanup_errors = cleanup;
+            failure.report.application_registered = registration.app_registered;
+            return Err(failure);
+        }
         registration.app_registered = true;
+        if let Err(error) = monitor.gate.healthy() {
+            let cleanup = registration.cleanup();
+            let mut failure = err_report(
+                adapter,
+                duration,
+                "registering_application",
+                format!("disconnect monitor failed: {error}"),
+            );
+            failure.report.application_registration_succeeded = true;
+            failure.report.application_registered = registration.app_registered;
+            failure.report.cleanup_errors = cleanup;
+            return Err(failure);
+        }
 
         if let Err(error) = call_manager(
             &connection,
+            &owner,
             &adapter_path,
             ADVERTISING_MANAGER,
             "RegisterAdvertisement",
             &ad_path,
         ) {
+            if matches!(error, zbus::Error::InputOutput(_) | zbus::Error::Failure(_)) {
+                registration.ad_registered = true;
+            }
             let cleanup = registration.cleanup();
-            return Err(err_report(
+            let mut failure = err_report(
                 adapter,
                 duration,
                 "registering_advertisement",
                 format!(
-                    "BlueZ advertisement registration failed ({}): {error}; rollback: {}",
-                    classify_dbus_error(&error),
-                    cleanup.join("; ")
+                    "BlueZ advertisement registration failed ({}): {error}",
+                    classify_dbus_error(&error)
                 ),
-            ));
+            );
+            failure.report.application_registration_succeeded = true;
+            failure.report.application_registered = registration.app_registered;
+            failure.report.advertisement_registered = registration.ad_registered;
+            failure.report.cleanup_errors = cleanup;
+            return Err(failure);
         }
         registration.ad_registered = true;
 
         let start = Instant::now();
         let deadline = start + Duration::from_secs(duration as u64);
         let mut last_probe = Instant::now();
-        let shutdown_reason = loop {
+        let active_result: Result<&'static str, ExperimentError> = (|| loop {
+            monitor.gate.healthy().map_err(|error| {
+                err_report(
+                    adapter,
+                    duration,
+                    "active",
+                    format!("disconnect monitor failed: {error}"),
+                )
+            })?;
             if terminate.load(std::sync::atomic::Ordering::Relaxed) {
-                break "termination_signal";
+                break Ok("termination_signal");
             }
             if Instant::now() >= deadline {
-                break "timeout";
+                break Ok("timeout");
             }
             if last_probe.elapsed() >= Duration::from_secs(1) {
-                let current = managed_objects(&connection).map_err(|error| {
+                let current_owner = bluez_owner(&connection).map_err(|error| {
+                    err_report(
+                        adapter,
+                        duration,
+                        "active",
+                        format!("D-Bus connection or BlueZ owner lost: {error}"),
+                    )
+                })?;
+                if current_owner != owner {
+                    break Err(err_report(
+                        adapter,
+                        duration,
+                        "active",
+                        "BlueZ service restarted",
+                    ));
+                }
+                let current = managed_objects(&connection, &owner).map_err(|error| {
                     err_report(
                         adapter,
                         duration,
@@ -943,11 +1535,12 @@ mod linux {
                         format!("D-Bus connection or BlueZ state lost: {error}"),
                     )
                 })?;
-                if !current.contains_key(
-                    &ObjectPath::try_from(adapter_path.as_str()).expect("valid adapter path"),
-                ) || adapter_powered(&current, &adapter_path) != Some(true)
+                if !has_interface(&current, &adapter_path, ADAPTER)
+                    || adapter_powered(&current, &adapter_path) != Some(true)
+                    || !has_interface(&current, &adapter_path, GATT_MANAGER)
+                    || !has_interface(&current, &adapter_path, ADVERTISING_MANAGER)
                 {
-                    break "adapter_lost";
+                    break Ok("adapter_lost");
                 }
                 state
                     .prune_devices(&device_connections(&current))
@@ -955,16 +1548,27 @@ mod linux {
                 last_probe = Instant::now();
             }
             thread::sleep(Duration::from_millis(100));
-        };
+        })();
         let elapsed = start.elapsed().as_secs().min(u16::MAX as u64) as u16;
         let cleanup_errors = registration.cleanup();
+        if let Err(mut failure) = active_result {
+            failure.report.application_registration_succeeded = true;
+            failure.report.advertisement_registration_succeeded = true;
+            failure.report.application_registered = registration.app_registered;
+            failure.report.advertisement_registered = registration.ad_registered;
+            failure.report.cleanup_errors = cleanup_errors;
+            return Err(failure);
+        }
+        let shutdown_reason = active_result.expect("error handled");
         if !cleanup_errors.is_empty() {
-            return Err(err_report(
-                adapter,
-                duration,
-                "stopping",
-                cleanup_errors.join("; "),
-            ));
+            let mut failure = err_report(adapter, duration, "stopping", "cleanup failed");
+            failure.report.shutdown_reason = Some(shutdown_reason);
+            failure.report.application_registration_succeeded = true;
+            failure.report.advertisement_registration_succeeded = true;
+            failure.report.application_registered = registration.app_registered;
+            failure.report.advertisement_registered = registration.ad_registered;
+            failure.report.cleanup_errors = cleanup_errors;
+            return Err(failure);
         }
         Ok(ExperimentReport {
             status: "stopped",
@@ -974,6 +1578,9 @@ mod linux {
             shutdown_reason: Some(shutdown_reason),
             application_registered: false,
             advertisement_registered: false,
+            application_registration_succeeded: true,
+            advertisement_registration_succeeded: true,
+            cleanup_errors: Vec::new(),
             // Manager interfaces establish API availability, not controller radio capability.
             controller_le_peripheral_capability: "unknown",
             supported_advertising_instances: supported_instances,
@@ -1010,14 +1617,229 @@ mod linux {
             );
         }
 
+        fn challenge(state: &GattState, device: &str) -> [u8; 8] {
+            state
+                .client_value(device, CharacteristicKind::Challenge, 0, 517)
+                .unwrap()[1..9]
+                .try_into()
+                .unwrap()
+        }
+
+        fn finish(state: &GattState, device: &str, id: [u8; 8]) {
+            let frame =
+                opencontinuity_core::gatt_wire::encode_frame(id, 0, true, true, 1, b"x").unwrap();
+            state.write_exchange(device, &frame, 23).unwrap();
+            state
+                .write_control(
+                    device,
+                    &opencontinuity_core::gatt_wire::encode_control(id, ControlCommand::Complete),
+                )
+                .unwrap();
+        }
+
+        #[test]
+        fn result_stays_with_original_session_until_final_fragment_consumed() {
+            let state = GattState::default();
+            let device = "/org/bluez/hci0/dev_01";
+            let id = challenge(&state, device);
+            finish(&state, device, id);
+            assert!(
+                state
+                    .client_value(device, CharacteristicKind::Challenge, 0, 23)
+                    .is_err()
+            );
+            let first = state
+                .client_value(device, CharacteristicKind::Response, 0, 23)
+                .unwrap();
+            assert_eq!(&first[2..10], &id);
+            assert!(
+                state
+                    .client_value(device, CharacteristicKind::Challenge, 0, 23)
+                    .is_err()
+            );
+            let second = state
+                .client_value(device, CharacteristicKind::Response, 22, 23)
+                .unwrap();
+            assert_eq!(first.len() + second.len(), 44);
+            assert!(
+                state
+                    .client_value(device, CharacteristicKind::Challenge, 0, 23)
+                    .is_err()
+            );
+            assert!(
+                state
+                    .client_value(device, CharacteristicKind::Response, 44, 23)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                state
+                    .client_value(device, CharacteristicKind::Response, 0, 23)
+                    .is_err()
+            );
+            let next = challenge(&state, device);
+            assert_ne!(id, next);
+            assert!(
+                state
+                    .client_value(device, CharacteristicKind::Response, 0, 23)
+                    .is_err()
+            );
+            let old =
+                opencontinuity_core::gatt_wire::encode_frame(id, 0, true, true, 1, b"x").unwrap();
+            assert!(state.write_exchange(device, &old, 23).is_err());
+            let error = state
+                .client_value(device, CharacteristicKind::Response, 0, 23)
+                .unwrap();
+            assert_eq!(&error[2..10], &next);
+        }
+
+        #[test]
+        fn cancellation_expiry_and_reconnect_invalidate_pending_work() {
+            let state = GattState::default();
+            let device = "/org/bluez/hci0/dev_01";
+            let id = challenge(&state, device);
+            let partial =
+                opencontinuity_core::gatt_wire::encode_frame(id, 0, true, false, 2, b"x").unwrap();
+            state.write_exchange(device, &partial, 23).unwrap();
+            state
+                .write_control(
+                    device,
+                    &opencontinuity_core::gatt_wire::encode_control(id, ControlCommand::Cancel),
+                )
+                .unwrap();
+            assert!(state.write_exchange(device, &partial, 23).is_err());
+            let response = state
+                .client_value(device, CharacteristicKind::Response, 0, 517)
+                .unwrap();
+            assert_eq!(response[1], 2);
+            let next = challenge(&state, device);
+            finish(&state, device, next);
+            if let SessionPhase::ResponseAvailable { since, .. } =
+                &mut state.clients.lock().unwrap().get_mut(device).unwrap().phase
+            {
+                *since = Instant::now() - RESPONSE_TIMEOUT - Duration::from_secs(1);
+            } else {
+                panic!("expected response");
+            }
+            assert!(
+                state
+                    .client_value(device, CharacteristicKind::Response, 0, 23)
+                    .is_err()
+            );
+            let third = challenge(&state, device);
+            assert_ne!(next, third);
+            state.prune_devices(&HashMap::new()).unwrap();
+            let reconnected = challenge(&state, device);
+            assert_ne!(third, reconnected);
+        }
+
+        #[test]
+        fn concurrent_clients_cannot_read_or_replace_each_others_results() {
+            let state = GattState::default();
+            let first = "/org/bluez/hci0/dev_01";
+            let second = "/org/bluez/hci0/dev_02";
+            let first_id = challenge(&state, first);
+            let second_id = challenge(&state, second);
+            finish(&state, first, first_id);
+            assert!(
+                state
+                    .client_value(second, CharacteristicKind::Response, 0, 517)
+                    .is_err()
+            );
+            finish(&state, second, second_id);
+            let a = state
+                .client_value(first, CharacteristicKind::Response, 0, 517)
+                .unwrap();
+            let b = state
+                .client_value(second, CharacteristicKind::Response, 0, 517)
+                .unwrap();
+            assert_eq!(&a[2..10], &first_id);
+            assert_eq!(&b[2..10], &second_id);
+            assert_ne!(&a[2..10], &b[2..10]);
+        }
+
+        #[test]
+        fn client_limit_and_idle_expiry_are_bounded() {
+            let state = GattState::default();
+            for index in 0..MAX_CLIENTS {
+                challenge(&state, &format!("/org/bluez/hci0/dev_{index}"));
+            }
+            assert!(
+                state
+                    .client_value(
+                        "/org/bluez/hci0/dev_extra",
+                        CharacteristicKind::Challenge,
+                        0,
+                        23
+                    )
+                    .is_err()
+            );
+            state
+                .clients
+                .lock()
+                .unwrap()
+                .get_mut("/org/bluez/hci0/dev_0")
+                .unwrap()
+                .last_activity = Instant::now() - IDLE_TIMEOUT - Duration::from_secs(1);
+            challenge(&state, "/org/bluez/hci0/dev_extra");
+            assert_eq!(state.clients.lock().unwrap().len(), MAX_CLIENTS);
+        }
+
+        #[test]
+        fn monitor_failure_closes_gate_before_clearing_sessions() {
+            let state = GattState::default();
+            let gate = MonitorGate::new(":1.1");
+            gate.inner.lock().unwrap().healthy = true;
+            challenge(&state, "/org/bluez/hci0/dev_01");
+            gate.fail(&state, "test failure");
+            assert!(state.clients.lock().unwrap().is_empty());
+            assert!(
+                gate.with_live(|| state.client_value(
+                    "/org/bluez/hci0/dev_01",
+                    CharacteristicKind::Challenge,
+                    0,
+                    23
+                ))
+                .is_err()
+            );
+            assert!(state.clients.lock().unwrap().is_empty());
+        }
+
+        #[test]
+        fn options_and_offsets_are_strict() {
+            let mut options = HashMap::new();
+            options.insert("mtu".into(), OwnedValue::from(22u16));
+            assert!(read_options(&options).is_err());
+            options.insert("mtu".into(), OwnedValue::from(518u16));
+            assert!(read_options(&options).is_err());
+            options.insert("mtu".into(), OwnedValue::from(true));
+            assert!(read_options(&options).is_err());
+            options.clear();
+            options.insert("offset".into(), OwnedValue::from(true));
+            assert!(read_options(&options).is_err());
+            assert!(option_device(&options).is_err());
+            assert!(read_fragment(b"abc", 4, 23).is_err());
+            assert_eq!(read_fragment(b"abc", 3, 23).unwrap(), b"");
+        }
+
         #[test]
         fn client_sessions_are_isolated_and_disconnect_drops_state() {
             let state = GattState::default();
             let first = state
-                .client_value("/org/bluez/hci0/dev_01", CharacteristicKind::Challenge)
+                .client_value(
+                    "/org/bluez/hci0/dev_01",
+                    CharacteristicKind::Challenge,
+                    0,
+                    517,
+                )
                 .unwrap();
             let second = state
-                .client_value("/org/bluez/hci0/dev_02", CharacteristicKind::Challenge)
+                .client_value(
+                    "/org/bluez/hci0/dev_02",
+                    CharacteristicKind::Challenge,
+                    0,
+                    517,
+                )
                 .unwrap();
             assert_ne!(&first[1..9], &second[1..9]);
             let first_id: [u8; 8] = first[1..9].try_into().unwrap();
@@ -1060,6 +1882,9 @@ pub fn serve(
             shutdown_reason: None,
             application_registered: false,
             advertisement_registered: false,
+            application_registration_succeeded: false,
+            advertisement_registration_succeeded: false,
+            cleanup_errors: Vec::new(),
             controller_le_peripheral_capability: "unknown",
             supported_advertising_instances: None,
             active_advertising_instances: None,
