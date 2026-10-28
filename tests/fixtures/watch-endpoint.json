@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "transport": "iphone_relay",
+  "transport_connected": true,
+  "expected_watch_identity": "watch-se2-mock",
+  "presented_watch_identity": "watch-se2-mock",
+  "watch_approved": true,
+  "user_presence": "explicit_confirmation",
+  "now_ms": 10000,
+  "challenge_lifetime_ms": 10000,
+  "response_delay_ms": 50
+}

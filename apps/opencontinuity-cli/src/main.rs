@@ -1,10 +1,11 @@
 use opencontinuity_core::{
     DoctorReport,
     research::{MockDiscoveryAdapter, ResearchFixture, read_only_report},
+    watch_endpoint::{WatchEndpointFixture, simulate},
 };
-use std::{env, fs, process::ExitCode};
+use std::{env, fs, io::Read, process::ExitCode};
 
-const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n\nCommands:\n  doctor       Report this build's capability states without scanning devices\n  research     Read a sanitized, offline protocol research fixture\n  --help       Print this help\n  --version    Print version\n\nThe research command reads fixtures only. It does not scan, connect, pair, authenticate, or unlock.\n";
+const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n       opencontinuity research watch-endpoint --fixture <path> [--json]\n\nCommands:\n  doctor         Report this build's capability states without scanning devices\n  research       Read sanitized offline protocol research fixtures\n  --help         Print this help\n  --version      Print version\n\nResearch commands use local mock fixtures only. They do not access Bluetooth or a network, authenticate an Apple Watch, or unlock Linux.\n";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -64,9 +65,14 @@ fn main() -> ExitCode {
 }
 
 fn run_research(args: Vec<String>) -> ExitCode {
-    if args.first().map(String::as_str) != Some("watch") {
-        return usage_error();
+    match args.first().map(String::as_str) {
+        Some("watch") => run_watch_research(&args),
+        Some("watch-endpoint") => run_watch_endpoint_research(&args),
+        _ => usage_error(),
     }
+}
+
+fn run_watch_research(args: &[String]) -> ExitCode {
     let mut path = None;
     let mut json_output = false;
     let mut index = 1;
@@ -123,6 +129,67 @@ fn run_research(args: Vec<String>) -> ExitCode {
 fn usage_error() -> ExitCode {
     eprintln!("{HELP}");
     ExitCode::from(2)
+}
+
+fn run_watch_endpoint_research(args: &[String]) -> ExitCode {
+    let mut path = None;
+    let mut json_output = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--fixture" if index + 1 < args.len() && path.is_none() => {
+                path = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--json" if !json_output => {
+                json_output = true;
+                index += 1;
+            }
+            _ => return usage_error(),
+        }
+    }
+    let Some(path) = path else {
+        return usage_error();
+    };
+
+    let result = (|| {
+        let file = fs::File::open(&path)
+            .map_err(|error| format!("could not read fixture {path}: {error}"))?;
+        let mut input = String::new();
+        file.take((opencontinuity_core::watch_endpoint::MAX_MESSAGE_BYTES + 1) as u64)
+            .read_to_string(&mut input)
+            .map_err(|error| format!("could not read fixture {path}: {error}"))?;
+        let fixture = WatchEndpointFixture::from_json(&input).map_err(|error| error.to_string())?;
+        simulate(&fixture).map_err(|error| error.to_string())
+    })();
+
+    match result {
+        Ok(report) if json_output => match serde_json::to_string_pretty(&report) {
+            Ok(output) => {
+                println!("{output}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("failed to serialize endpoint report: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Ok(report) => {
+            println!("Watch endpoint research simulation:");
+            println!(
+                "  transport: {:?} ({:?})",
+                report.transport.kind, report.transport.state
+            );
+            println!("  authentication: {:?}", report.authentication.result);
+            println!("  evidence: {}", report.authentication.evidence);
+            println!("  authorization: never evaluated");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 #[cfg(test)]

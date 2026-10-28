@@ -14,6 +14,8 @@ The core capability vocabulary is `supported`, `experimental`, `unsupported`, `b
 
 P002 adds `opencontinuity_core::research`, a portable, sanitized fixture model and `DiscoveryAdapter` boundary with a deterministic mock backend. The CLI research command reads a local JSON fixture only. `DiscoveryReport` always carries `authorization: never_evaluated`; its type has no authorized state. This is research scaffolding, not a BlueZ adapter, actual discovery, or an unlock path. Raw addresses, payload bytes, and credentials are excluded from the fixture schema.
 
+P003 adds `opencontinuity_core::watch_endpoint`, portable endpoint/transport traits, typed capability evidence, bounded versioned challenge/approval messages and deterministic mocks. The mock uses `ed25519-dalek` to exercise transcript-bound signatures and replay/expiry/presence rejection. `opencontinuity research watch-endpoint --fixture <path> [--json]` reports simulated transport/authentication state and always emits `authorization: never_evaluated`. Its test-only private seed and deterministic SHA-256 nonce sequence are public mock data, never production secrets or a CSPRNG. No Apple SDK, Bluetooth, network, keychain, device, PAM or host authorization integration exists. See the P003 validation and security design for boundaries and limitations.
+
 ## Planned module boundaries
 
 Add modules when there is concrete implementation work:
