@@ -37,6 +37,12 @@ struct ContentView: View {
                         .tint(.red)
                 }
 
+                Toggle("Diagnostics", isOn: Binding(get: { bluetooth.diagnosticsEnabled }, set: { bluetooth.setDiagnosticsEnabled($0) }))
+                if bluetooth.diagnosticsEnabled {
+                    ForEach(Array(bluetooth.diagnosticLines.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.caption2)
+                    }
+                }
                 Text(bluetooth.detail).font(.caption2).fixedSize(horizontal: false, vertical: true)
                 Text("A successful exchange only tests synthetic transport. It does not authenticate or unlock.")
                     .font(.caption2).foregroundStyle(.secondary)
