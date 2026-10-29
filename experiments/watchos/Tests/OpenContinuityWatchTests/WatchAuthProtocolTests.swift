@@ -114,7 +114,7 @@ final class WatchAuthProtocolTests: XCTestCase {
         XCTAssertEqual(request.nonce.count, 32)
         XCTAssertEqual(request.sessionID.count, 16)
         XCTAssertEqual(hostEnrollment.publicKeySEC1.count, 65)
-        XCTAssertEqual(data(fixture.request.signature_raw_hex).count, 64)
+        XCTAssertEqual(try data(fixture.request.signature_raw_hex).count, 64)
         XCTAssertEqual(try verifiedRequest().digest.count, 32)
     }
 
@@ -140,7 +140,7 @@ final class WatchAuthProtocolTests: XCTestCase {
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         let encoder = JSONEncoder()
         let encodedResponse = try encoder.encode(responseDTO)
-        root["response"] = try XCTUnwrap(JSONSerialization.jsonObject(with: encodedResponse))
+        root["response"] = try JSONSerialization.jsonObject(with: encodedResponse)
         let output = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         let outputURL: URL
         if let configured = ProcessInfo.processInfo.environment["OC_P008_INTEROP_OUTPUT"] {
