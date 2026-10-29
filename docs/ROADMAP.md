@@ -40,3 +40,8 @@ Earlier planning grouped P001–P006 under Foundation + Settings, while P002–P
 4. Remaining Continuity, AirPlay, HomeKit and iCloud features.
 
 Future platform order begins with Linux (reference: Arch Linux, Hyprland, Caelestia), then other Linux distributions, FreeBSD/Unix-like, and Windows. No schedule or completion claims are made for P002–P060 until the supplied planning source is available.
+
+
+## P007 — foreground watchOS client (provisional)
+
+P007 continues the provisional Watch BLE research track because the original P001–P060 roadmap remains unavailable. Source for an explicit foreground SwiftUI/CoreBluetooth synthetic GATT client and shared wire codec fixtures is present under `experiments/watchos/`. Rust validates shared vectors against the existing P006 codec. Apple SDK compilation, Swift test execution, simulator and physical Linux/Watch trials remain separate outstanding gates as recorded in [P007 validation](P007_VALIDATION.md). The Foundation/Qt6/QML Settings framework and production Bluetooth adapter work remain outstanding. No authorization or unlock behavior is introduced.

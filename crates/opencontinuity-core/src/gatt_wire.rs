@@ -247,6 +247,7 @@ pub fn encode_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
 
     fn test_frame(
         id: [u8; 8],
@@ -427,5 +428,74 @@ mod tests {
             assembler.push(&final_frame, 23, now),
             Err(WireError::AlreadyComplete)
         );
+    }
+
+    #[test]
+    fn p007_shared_swift_fixture_matches_rust_wire_encoders() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../experiments/watchos/Tests/OpenContinuityWatchTests/Fixtures/gatt-v1.json"
+        ))
+        .unwrap();
+        let from_hex = |value: &str| -> Vec<u8> {
+            value
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    let text = std::str::from_utf8(pair).unwrap();
+                    u8::from_str_radix(text, 16).unwrap()
+                })
+                .collect()
+        };
+        let id: [u8; 8] = from_hex(fixture["session_id"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let payload = from_hex(fixture["payload"].as_str().unwrap());
+        let expected_frames: Vec<Vec<u8>> = fixture["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| from_hex(value.as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            encode_frame(id, 0, true, false, payload.len(), &payload[..5]).unwrap(),
+            expected_frames[0]
+        );
+        assert_eq!(
+            encode_frame(id, 1, false, true, 0, &payload[5..]).unwrap(),
+            expected_frames[1]
+        );
+        assert_eq!(
+            encode_control(id, ControlCommand::Complete).to_vec(),
+            from_hex(fixture["complete"].as_str().unwrap())
+        );
+        assert_eq!(
+            encode_control(id, ControlCommand::Cancel).to_vec(),
+            from_hex(fixture["cancel"].as_str().unwrap())
+        );
+        assert_eq!(
+            [
+                vec![WIRE_VERSION, 0],
+                id.to_vec(),
+                (payload.len() as u16).to_le_bytes().to_vec(),
+                sha2::Sha256::digest(&payload).to_vec()
+            ]
+            .concat(),
+            from_hex(fixture["success"].as_str().unwrap())
+        );
+        assert_eq!(
+            [
+                vec![WIRE_VERSION, 2],
+                id.to_vec(),
+                (9u16).to_le_bytes().to_vec(),
+                sha2::Sha256::digest(b"cancelled").to_vec()
+            ]
+            .concat(),
+            from_hex(fixture["cancel_response"].as_str().unwrap())
+        );
+        assert_eq!(
+            [vec![WIRE_VERSION, 0x80], id.to_vec(), vec![1]].concat(),
+            from_hex(fixture["error"].as_str().unwrap())
+        );
+        assert_eq!(from_hex(fixture["challenge"].as_str().unwrap()).len(), 25);
     }
 }
