@@ -1,6 +1,6 @@
 # Feature Matrix
 
-States describe the P008 provisional branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
+States describe the P009 provisional branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
 
 | Area | State | Evidence / scope |
 | --- | --- | --- |
@@ -17,6 +17,10 @@ States describe the P008 provisional branch build. `unsupported` means no implem
 | P008 fixture verifier CLI | experimental | `opencontinuity research watch-auth --fixture <path> [--json]` verifies signed test-only request and response fixtures with no system side effects. Every report says `authorization: never_evaluated`. |
 | Swift P008 CryptoKit codec and signing | experimental source | `WatchAuthProtocol.swift` matches the Rust transcript and shared public-key/signature formats; Rust-signed request fixture is tested by Swift and CryptoKit-generated response is sent to Rust in hosted CI. Local Apple toolchain is unavailable in this environment. |
 | Foreground P008 consent component | experimental source | `ResearchConsentView` requires a verified request and explicit choice; approval checks public `.deviceOwnerAuthentication` support and fails closed. It is not connected to GATT v1. Apple compilation and SE 2 LocalAuthentication behavior remain pending/unverified. |
+| P009 signed research transport codec | experimental | `watch_auth_transport.rs` and `WatchAuthTransport.swift` implement separate versioned framing, bounded 1,088-byte envelopes, strict sequencing/owner/session checks, explicit completion and GET/read/ACK request delivery. Portable Rust tests pass locally; Swift and hosted integration await Apple CI. |
+| P009 Rust → Swift → Rust serialized exchange | experimental source | Workflow consumes real serialized Rust request frames in Swift, verifies P008 with CryptoKit, signs a simulated denial and returns response frames for Rust reassembly/P008 verification. This is test-fixture integration, not a live Bluetooth exchange or physical consent. |
+| P009 BlueZ/CoreBluetooth runtime transport | experimental source | The Linux CLI registers a distinct bounded P009 service and verifies a fresh signed response; the Watch manager implements explicit GET/read/ACK, verified-request gating, consent presentation and sequential response writes. Apple SDK compile, live D-Bus operation and RF remain NOT RUN. |
+| P009 live signed approval | blocked | There is no reviewed in-memory credential injection workflow for the shipped app, Apple build/device evidence, or physical BlueZ/Watch trial. No private test key is shipped. |
 | watchOS foreground research client | experimental source | SwiftUI/CoreBluetooth app and pure wire codec source exist under `experiments/watchos/`; no Apple compilation, signing, simulator, or physical Watch test is claimed. |
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
 | Apple Watch SE 2 Auto Unlock, native protocol | unsupported | P002 research found public third-party enrollment/STS support blocked. Trust stages are unknown; no OS unlock behavior. |
