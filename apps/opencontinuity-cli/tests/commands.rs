@@ -9,6 +9,7 @@ fn help_and_version_work() {
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("doctor"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("research watch-auth"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("watch-auth-gatt serve"));
 
     let version = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
         .arg("--version")
@@ -31,6 +32,102 @@ fn watch_auth_command_requires_an_explicit_signed_response_fixture() {
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("explicit foreground consent"));
     assert!(result.stdout.is_empty());
+}
+
+#[test]
+fn watch_auth_transport_prepare_emits_versioned_serialized_frames() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../experiments/watchos/Tests/OpenContinuityWatchTests/Fixtures/watch-auth-request-v1.json"
+    );
+    let output_path = std::env::temp_dir().join(format!(
+        "opencontinuity-p009-request-transport-{}.json",
+        std::process::id()
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args([
+            "research",
+            "watch-auth-transport",
+            "prepare",
+            "--fixture",
+            fixture,
+            "--output",
+        ])
+        .arg(&output_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let transport: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&output_path).unwrap()).unwrap();
+    let _ = std::fs::remove_file(&output_path);
+    assert_eq!(transport["schema_version"], 1);
+    assert_eq!(transport["transfer_id_hex"], "a5a5a5a5a5a5a5a5");
+    let frames = transport["request_frames_hex"].as_array().unwrap();
+    assert!(!frames.is_empty());
+    let decoded: Vec<Vec<u8>> = frames
+        .iter()
+        .map(|frame| {
+            let text = frame.as_str().unwrap();
+            text.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect()
+        })
+        .collect();
+    assert!(decoded.iter().all(|frame| frame.len() <= 20));
+    assert!(decoded.iter().all(|frame| frame[0..3] == [b'O', b'A', 1]));
+    for (index, frame) in decoded.iter().enumerate() {
+        assert_eq!(frame[11], index as u8);
+        assert_eq!(
+            u16::from_le_bytes([frame[13], frame[14]]),
+            if index == 0 {
+                u16::from_le_bytes([decoded[0][13], decoded[0][14]])
+            } else {
+                0
+            }
+        );
+    }
+    assert_eq!(decoded.first().unwrap()[12] & 0x01, 0x01);
+    assert_eq!(decoded.last().unwrap()[12] & 0x02, 0x02);
+    assert_eq!(
+        u16::from_le_bytes([decoded[0][13], decoded[0][14]]) as usize,
+        hex_decode_len(transport["request_envelope_hex"].as_str().unwrap())
+    );
+}
+
+#[test]
+fn authenticated_gatt_command_caps_runtime_to_the_signed_request_lifetime() {
+    let result = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args([
+            "research",
+            "watch-auth-gatt",
+            "serve",
+            "--adapter",
+            "hci0",
+            "--duration-seconds",
+            "61",
+            "--enrollments",
+            "/does/not/read/p009-enrollments.json",
+            "--host-key-file",
+            "/does/not/read/p009-host-key",
+            "--experimental",
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("must not exceed the 60-second P008 request lifetime")
+    );
+}
+
+fn hex_decode_len(value: &str) -> usize {
+    assert_eq!(value.len() % 2, 0);
+    value.len() / 2
 }
 
 #[test]

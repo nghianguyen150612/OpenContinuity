@@ -270,6 +270,47 @@ public struct WatchAuthReplayGuard {
 }
 
 public enum WatchAuthProtocol {
+    /// Parse the P009 request envelope and only return a consent-capable token
+    /// after P008 canonical, pin, action, binding, time, signature and replay
+    /// checks have passed. BLE advertisement identity is never used here.
+    public static func verifyHostTransportEnvelope(
+        bytes: Data,
+        enrollment: HostEnrollment?,
+        expectedWatchEnrollmentID: String,
+        nowMilliseconds: UInt64,
+        replayGuard: inout WatchAuthReplayGuard
+    ) throws -> VerifiedHostRequest {
+        let envelope = try WatchSignedEnvelope(direction: .hostToWatch, bytes: bytes)
+        return try verifyHostRequest(
+            canonicalBytes: envelope.canonical,
+            signatureRaw: envelope.signatureRaw,
+            enrollment: enrollment,
+            expectedWatchEnrollmentID: expectedWatchEnrollmentID,
+            nowMilliseconds: nowMilliseconds,
+            replayGuard: &replayGuard
+        )
+    }
+
+    /// Reassemble first, then call this with the exact P009 response envelope.
+    /// The typed result retains a signed rejection as a rejection.
+    public static func verifyWatchTransportEnvelope(
+        bytes: Data,
+        enrollment: WatchEnrollment?,
+        verifiedRequest: VerifiedHostRequest,
+        nowMilliseconds: UInt64,
+        replayGuard: inout WatchAuthReplayGuard
+    ) throws -> WatchAuthResponse {
+        let envelope = try WatchSignedEnvelope(direction: .watchToHost, bytes: bytes)
+        return try verifyWatchResponse(
+            canonicalBytes: envelope.canonical,
+            signatureRaw: envelope.signatureRaw,
+            enrollment: enrollment,
+            verifiedRequest: verifiedRequest,
+            nowMilliseconds: nowMilliseconds,
+            replayGuard: &replayGuard
+        )
+    }
+
     public static func verifyHostRequest(
         canonicalBytes: Data,
         signatureRaw: Data,
@@ -299,6 +340,24 @@ public enum WatchAuthProtocol {
         return VerifiedHostRequest(request: request, canonicalRequest: canonicalBytes)
     }
 
+    /// Validate the Watch's independently enrolled signing identity before
+    /// presenting consent. This does not sign or authorize a response.
+    public static func validateWatchResponseEligibility(
+        verifiedRequest: VerifiedHostRequest,
+        enrollment: WatchEnrollment,
+        signingKey: P256.Signing.PrivateKey
+    ) throws {
+        try validate(enrollment)
+        let request = verifiedRequest.request
+        guard request.targetWatchEnrollmentID == enrollment.enrollmentID,
+              enrollment.boundHostEnrollmentID == request.hostEnrollmentID,
+              enrollment.boundHostIdentity == request.hostIdentity,
+              enrollment.boundLinuxUID == request.linuxUID,
+              signingKey.publicKey.x963Representation == enrollment.publicKeySEC1 else {
+            throw WatchAuthError.bindingMismatch
+        }
+    }
+
     /// Call only after a manual foreground decision. Approval callers must
     /// first complete supported LocalAuthentication; rejection is a manual
     /// decision too. Cancellation and LocalAuthentication failure return no
@@ -311,7 +370,11 @@ public enum WatchAuthProtocol {
         consentResult: WatchConsentResult,
         responseAtMilliseconds: UInt64
     ) throws -> SignedWatchResponse {
-        try validate(enrollment)
+        try validateWatchResponseEligibility(
+            verifiedRequest: verifiedRequest,
+            enrollment: enrollment,
+            signingKey: signingKey
+        )
         guard consentResult == .explicitUserDecision else {
             throw WatchAuthError.consentNotCompleted
         }
@@ -321,15 +384,6 @@ public enum WatchAuthProtocol {
         }
         guard responseAtMilliseconds < request.expiresAtMilliseconds else {
             throw WatchAuthError.expired
-        }
-        guard request.targetWatchEnrollmentID == enrollment.enrollmentID,
-              enrollment.boundHostEnrollmentID == request.hostEnrollmentID,
-              enrollment.boundHostIdentity == request.hostIdentity,
-              enrollment.boundLinuxUID == request.linuxUID else {
-            throw WatchAuthError.bindingMismatch
-        }
-        guard signingKey.publicKey.x963Representation == enrollment.publicKeySEC1 else {
-            throw WatchAuthError.bindingMismatch
         }
         let response = WatchAuthResponse(
             requestDigest: verifiedRequest.digest,

@@ -8,6 +8,12 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("OpenContinuity").font(.headline)
                 Text("Experimental BLE transport").font(.caption2).foregroundStyle(.secondary)
+                Text("Authenticated research: blocked")
+                    .font(.caption)
+                    .bold()
+                Text("The P009 client requires independently pinned test enrollments and a temporary Watch signing key injected in memory by a research harness. This app has no safe key provisioning flow; no authenticated scan or consent prompt is available from this screen.")
+                    .font(.caption2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Label(bluetooth.bluetoothState, systemImage: "dot.radiowaves.left.and.right")
                     .font(.caption)
                 Text("Stage: \(bluetooth.state.title)").font(.caption).bold()
@@ -38,10 +44,19 @@ struct ContentView: View {
                 }
 
                 Text(bluetooth.detail).font(.caption2).fixedSize(horizontal: false, vertical: true)
-                Text("A successful exchange only tests synthetic transport. It does not authenticate or unlock.")
+                Text("Neither synthetic transport nor a signed P009 research response authorizes or unlocks Linux.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             .padding()
+        }
+        .sheet(item: $bluetooth.consentPresentation) { presentation in
+            ResearchConsentView(
+                verifiedRequest: presentation.verifiedRequest,
+                watchEnrollment: presentation.watchEnrollment,
+                researchSigningKey: presentation.signingKey
+            ) { result in
+                bluetooth.completeAuthenticatedConsent(result, presentationID: presentation.id)
+            }
         }
     }
 }

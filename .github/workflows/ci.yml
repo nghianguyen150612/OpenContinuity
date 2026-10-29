@@ -44,6 +44,24 @@ jobs:
         env:
           OC_P008_INTEROP_OUTPUT: ${{ runner.temp }}/watch-auth-response-rust-interop.json
         run: swift test --package-path experiments/watchos
+      - name: Build Rust transport fixture tool
+        run: cargo build --bin opencontinuity
+      - name: Serialize Rust-signed request transport frames
+        run: >-
+          cargo run --bin opencontinuity -- research watch-auth-transport prepare
+          --fixture experiments/watchos/Tests/OpenContinuityWatchTests/Fixtures/watch-auth-request-v1.json
+          --output "$RUNNER_TEMP/watch-auth-request-transport.json"
+      - name: Run Swift reassembly, CryptoKit verification, signing, and framing
+        env:
+          OC_P009_TRANSPORT_INPUT: ${{ runner.temp }}/watch-auth-request-transport.json
+          OC_P009_TRANSPORT_OUTPUT: ${{ runner.temp }}/watch-auth-response-transport.json
+        run: swift test --package-path experiments/watchos --filter WatchAuthTransportTests/testRustRequestSwiftReassemblyAndSignedResponseRustReassembly
+      - name: Reassemble and verify Swift-signed response in Rust
+        run: >-
+          cargo run --bin opencontinuity -- research watch-auth-transport
+          verify-response
+          --fixture experiments/watchos/Tests/OpenContinuityWatchTests/Fixtures/watch-auth-request-v1.json
+          --input "$RUNNER_TEMP/watch-auth-response-transport.json" --json
       - name: Build Rust fixture verifier
         run: cargo build --bin opencontinuity
       - name: Verify CryptoKit response signature in Rust
