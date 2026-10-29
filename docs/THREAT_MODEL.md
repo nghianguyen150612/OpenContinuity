@@ -45,3 +45,9 @@ Keep protocols in portable code and hardware/system access behind narrow adapter
 ## P006 research transport
 
 See [P006 GATT session hardening](research/P006_GATT_SESSION_HARDENING.md) for implemented state/resource controls and unresolved nearby-client exhaustion, unreported disconnects, relay and compromised-host risks. Synthetic acknowledgments, pairing and proximity signals never authorize; `authorization: never_evaluated`.
+
+## P008 signed approval research
+
+P008 adds a separate P-256/SHA-256 signed profile with role-separated request and response transcripts, strict bounded canonical encoding, independent test-only host/Watch enrollment records, expiry checks and bounded in-memory replay guards. The Watch consent component accepts only a request verified by the pinned host key before UI presentation. Approval requires an explicit foreground action and a supported LocalAuthentication result; cancellation, unsupported policy, denial and expiry return no signature. The test-only fixture CLI has no privileged, Bluetooth, key-store or account-management side effects. All reports retain `authorization: never_evaluated`.
+
+Enrollment pins are not authenticated out-of-band, keys are not stored persistently, replay state does not survive restart, and app key signatures or LocalAuthentication results do not attest genuine Watch hardware, wearer presence, secure distance or uncompromised software. Relays, clock drift, stolen/compromised endpoints and denial of service remain unresolved. P008 does not modify PAM, polkit, login managers or desktop unlock; it is not Apple's proprietary Watch-to-Mac Auto Unlock protocol, and P007's synthetic SHA-256 acknowledgment remains unauthenticated. See the [P008 protocol](research/P008_AUTH_PROTOCOL.md), [enrollment boundaries](research/P008_ENROLLMENT_TRUST.md), [consent research](research/P008_WATCH_CONSENT.md) and [security review](research/P008_SECURITY_REVIEW.md).

@@ -13,12 +13,14 @@ targets:
       - path: OpenContinuityWatchApp.swift
       - path: ContentView.swift
       - path: WatchBluetoothManager.swift
+      - path: ResearchConsentView.swift
       - path: GattIdentifiers.swift
       - path: GattResearchState.swift
     dependencies:
       - package: OpenContinuityProtocol
         product: OpenContinuityProtocol
       - sdk: CoreBluetooth.framework
+      - sdk: LocalAuthentication.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.opencontinuity.experimental.watch

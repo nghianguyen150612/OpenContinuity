@@ -8,6 +8,7 @@ fn help_and_version_work() {
         .unwrap();
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("doctor"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("research watch-auth"));
 
     let version = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
         .arg("--version")
@@ -15,6 +16,21 @@ fn help_and_version_work() {
         .unwrap();
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn watch_auth_command_requires_an_explicit_signed_response_fixture() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../experiments/watchos/Tests/OpenContinuityWatchTests/Fixtures/watch-auth-request-v1.json"
+    );
+    let result = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args(["research", "watch-auth", "--fixture", path, "--json"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("explicit foreground consent"));
+    assert!(result.stdout.is_empty());
 }
 
 #[test]

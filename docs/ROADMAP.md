@@ -45,3 +45,7 @@ Future platform order begins with Linux (reference: Arch Linux, Hyprland, Caeles
 ## P007 — foreground watchOS client (provisional)
 
 P007 continues the provisional Watch BLE research track because the original P001–P060 roadmap remains unavailable. Source for an explicit foreground SwiftUI/CoreBluetooth synthetic GATT client and shared wire codec fixtures is present under `experiments/watchos/`. Rust validates shared vectors against the existing P006 codec. Apple SDK compilation, Swift test execution, simulator and physical Linux/Watch trials remain separate outstanding gates as recorded in [P007 validation](P007_VALIDATION.md). The Foundation/Qt6/QML Settings framework and production Bluetooth adapter work remain outstanding. No authorization or unlock behavior is introduced.
+
+## P008 — foreground signed approval research (provisional)
+
+P008 adds a separate P-256/SHA-256 mutual-authentication profile, strict Rust and Swift canonical codecs, fixture-only verification, and an isolated foreground consent component. It does not build on P007's synthetic SHA-256 GATT acknowledgment, does not authorize Linux, and does not claim native Apple Auto Unlock. Rust validation is local; hosted macOS signature interoperability and unsigned watchOS target compilation are evaluated by CI. Persistent trust, crash-safe replay protection, Secure Enclave qualification, Watch SE 2 LocalAuthentication behavior, physical BLE and signed installation remain future gates. The original P001–P060 roadmap remains unavailable, so P008 is provisional.

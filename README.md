@@ -10,7 +10,7 @@ OpenContinuity is an open-source effort to build native Apple ecosystem interope
 
 ## P001 status
 
-P001 is the project foundation. The CLI and idle foreground daemon are usable. No Apple protocol has been implemented yet: Watch Auto Unlock, native AWDL/AirDrop, AirPods configuration and switching are all **unsupported in this build**. The doctor command reports that honestly and does not scan for devices. See [Feature Matrix](docs/FEATURE_MATRIX.md) and [Roadmap](docs/ROADMAP.md).
+P001 is the project foundation. The CLI and idle foreground daemon are usable. No native Apple protocol has been implemented: Watch Auto Unlock, native AWDL/AirDrop, AirPods configuration and switching are all **unsupported in this build**. P008 adds a separate signed Watch approval research profile; it is not Apple Auto Unlock and does not authorize Linux. The doctor command reports capabilities honestly and does not scan for devices. See [Feature Matrix](docs/FEATURE_MATRIX.md) and [Roadmap](docs/ROADMAP.md).
 
 ## Build and run
 
@@ -23,13 +23,14 @@ cargo run -p opencontinuity-cli -- doctor
 cargo run -p opencontinuity-cli -- doctor --json
 cargo run -p opencontinuity-cli -- research watch --fixture tests/fixtures/watch-discovery.json --json
 cargo run -p opencontinuity-cli -- research watch-endpoint --fixture tests/fixtures/watch-endpoint.json --json
+cargo run -p opencontinuity-cli -- research watch-auth --fixture path/to/signed-test-fixture.json --json
 cargo run -p opencontinuity-cli -- research watch-ble --capabilities --json
 cargo run -p opencontinuity-cli -- research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental --json
 cargo run -p opencontinuityd -- --help
 cargo run -p opencontinuityd
 ```
 
-The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. `research watch` and `research watch-endpoint` use only local fixtures and deterministic mocks. `research watch-ble --capabilities` remains read-only. `research watch-gatt serve` is a separate experimental command requiring explicit `--experimental`, an adapter, and a 1–300 second runtime; it temporarily registers a synthetic GATT service and advertisement, without powering on the adapter or authorizing Linux. This repository has no Apple Watch app, and real BlueZ/Watch communication is not claimed. See [P005 server](docs/research/P005_BLUEZ_GATT_SERVER.md), [wire contract](docs/research/P005_WIRE_CONTRACT.md), [security review](docs/research/P005_SECURITY_REVIEW.md), and [validation](docs/P005_VALIDATION.md).
+The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. `research watch` and `research watch-endpoint` use only local fixtures and deterministic mocks. `research watch-auth` verifies signed test-only research fixtures without system side effects and always reports `authorization: never_evaluated`. On macOS, `OC_P008_INTEROP_OUTPUT=/tmp/watch-auth-response.json swift test --package-path experiments/watchos` creates a complete test fixture; pass that path to the CLI to check both signatures. `research watch-ble --capabilities` remains read-only. `research watch-gatt serve` is a separate experimental command requiring explicit `--experimental`, an adapter, and a 1–300 second runtime; it temporarily registers a synthetic GATT service and advertisement, without powering on the adapter or authorizing Linux. Experimental Watch source exists, but real BlueZ/Watch communication is not claimed. See [P005 server](docs/research/P005_BLUEZ_GATT_SERVER.md), [wire contract](docs/research/P005_WIRE_CONTRACT.md), [P008 protocol](docs/research/P008_AUTH_PROTOCOL.md), [security review](docs/research/P008_SECURITY_REVIEW.md), and [validation](docs/P008_VALIDATION.md).
 
 ## Architecture
 
@@ -45,6 +46,6 @@ There is no telemetry. See [Security](SECURITY.md), [Contributing](CONTRIBUTING.
 
 OpenContinuity is MIT-licensed, as established by the repository's original [LICENSE](LICENSE). That license does not grant rights to third-party source, protocol specifications, trademarks, keys, or media. GPLv3 dependencies can impose source and licensing obligations on combined distributions; evaluate every dependency and linking boundary before adoption. See the upstream manifest.
 
-### P006 provisional BlueZ qualification
+### P008 provisional signed approval research
 
-Run `scripts/qualify-bluez-host.sh` for read-only host inventory; see [host qualification](docs/research/P006_BLUEZ_HOST_QUALIFICATION.md) before any explicitly opted-in, time-bounded GATT trial. P007 provides experimental foreground watchOS SwiftUI/CoreBluetooth source and a portable pure protocol module; Apple compilation and Watch tests are NOT RUN in the development environment. See [P007 implementation](docs/research/P007_WATCHOS_CLIENT.md) and [validation](docs/P007_VALIDATION.md). BlueZ controller tests remain NOT RUN. The synthetic transport does not authenticate or authorize. P006 continues the provisional BLE research track; the missing original Foundation/Settings roadmap, production adapter and Qt6/QML framework remain unresolved.
+P008 adds Rust P-256 request/response verification, CryptoKit-compatible Swift transcripts, test-only independent enrollment pins and a foreground LocalAuthentication consent component that is separate from GATT v1. The component does not unlock Linux. Hosted Apple compilation and physical Watch/BlueZ behavior remain separate gates. See the [protocol](docs/research/P008_AUTH_PROTOCOL.md), [enrollment boundaries](docs/research/P008_ENROLLMENT_TRUST.md), [consent research](docs/research/P008_WATCH_CONSENT.md), [security review](docs/research/P008_SECURITY_REVIEW.md) and [validation](docs/P008_VALIDATION.md). The missing original Foundation/Settings roadmap, production adapter and Qt6/QML framework remain unresolved.

@@ -1,6 +1,7 @@
 use opencontinuity_core::{
     DoctorReport,
     research::{MockDiscoveryAdapter, ResearchFixture, read_only_report},
+    watch_auth_research::{WatchAuthFixture, verify_fixture},
     watch_endpoint::{WatchEndpointFixture, simulate},
 };
 use std::{env, fs, io::Read, process::ExitCode};
@@ -8,7 +9,7 @@ use std::{env, fs, io::Read, process::ExitCode};
 mod bluez;
 mod gatt;
 
-const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n       opencontinuity research watch-endpoint --fixture <path> [--json]\n       opencontinuity research watch-ble --capabilities [--json]\n       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\nCommands:\n  doctor         Report this build's capability states without scanning devices\n  research       Read fixtures, inspect BlueZ, or run an explicit experimental GATT server\n  --help         Print this help\n  --version      Print version\n\nWatch fixtures are offline mocks. watch-ble --capabilities is read-only. watch-gatt serve registers a temporary synthetic service and advertisement; it requires --experimental and never authorizes Linux.\n";
+const HELP: &str = "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\nUsage: opencontinuity [--help] [--version] [doctor [--json]]\n       opencontinuity research watch --fixture <path> [--json]\n       opencontinuity research watch-endpoint --fixture <path> [--json]\n       opencontinuity research watch-auth --fixture <path> [--json]\n       opencontinuity research watch-ble --capabilities [--json]\n       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\nCommands:\n  doctor         Report this build's capability states without scanning devices\n  research       Read fixtures, inspect BlueZ, or run an explicit experimental GATT server\n  --help         Print this help\n  --version      Print version\n\nWatch fixtures are offline mocks. watch-auth verifies test-only signed transcripts and never authorizes Linux. watch-ble --capabilities is read-only. watch-gatt serve registers a temporary synthetic service and advertisement; it requires --experimental and never authorizes Linux.\n";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -71,6 +72,7 @@ fn run_research(args: Vec<String>) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("watch") => run_watch_research(&args),
         Some("watch-endpoint") => run_watch_endpoint_research(&args),
+        Some("watch-auth") => run_watch_auth_research(&args),
         Some("watch-ble") => run_watch_ble_research(&args),
         Some("watch-gatt") => run_watch_gatt_experiment(&args),
         _ => usage_error(),
@@ -329,6 +331,72 @@ fn run_watch_endpoint_research(args: &[String]) -> ExitCode {
             );
             println!("  authentication: {:?}", report.authentication.result);
             println!("  evidence: {}", report.authentication.evidence);
+            println!("  authorization: never evaluated");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_watch_auth_research(args: &[String]) -> ExitCode {
+    let mut path = None;
+    let mut json_output = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--fixture" if index + 1 < args.len() && path.is_none() => {
+                path = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--json" if !json_output => {
+                json_output = true;
+                index += 1;
+            }
+            _ => return usage_error(),
+        }
+    }
+    let Some(path) = path else {
+        return usage_error();
+    };
+    let result = (|| {
+        let mut input = String::new();
+        fs::File::open(&path)
+            .map_err(|error| format!("could not read fixture {path}: {error}"))?
+            .take(16 * 1024 + 1)
+            .read_to_string(&mut input)
+            .map_err(|error| format!("could not read fixture {path}: {error}"))?;
+        if input.len() > 16 * 1024 {
+            return Err("watch-auth fixture exceeds 16 KiB".to_owned());
+        }
+        let fixture = WatchAuthFixture::from_json(&input).map_err(|error| error.to_string())?;
+        verify_fixture(&fixture).map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(report) if json_output => match serde_json::to_string_pretty(&report) {
+            Ok(output) => {
+                println!("{output}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("failed to serialize Watch auth research report: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Ok(report) => {
+            println!("Watch auth research fixture:");
+            println!(
+                "  host request signature verified: {}",
+                report.host_request_signature_verified
+            );
+            println!(
+                "  Watch response signature verified: {}",
+                report.watch_response_signature_verified
+            );
+            println!("  decision: {:?}", report.decision);
+            println!("  result: {}", report.result);
             println!("  authorization: never evaluated");
             ExitCode::SUCCESS
         }
