@@ -21,6 +21,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var lifecycle = GattLifecycle()
     private var pendingCharacteristic: CBCharacteristic?
+    private var expectedService: CBService?
     private var connectionDelegate: ConnectionDelegate?
     var canStartScan: Bool { lifecycle.canScan && state != .scanning }
     private var peripheral: CBPeripheral?
@@ -195,6 +196,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         watchdog?.cancel()
         watchdog = nil
         expectedRead = nil
+        expectedService = nil
         pendingCharacteristic = nil
         frames.removeAll()
         frameIndex = 0
@@ -253,7 +255,8 @@ extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        guard central === self.central, peripheral === self.peripheral else { return }
+        guard central === self.central, peripheral === self.peripheral,
+              state == .connecting || lifecycle.retiring else { return }
         finishDisconnect(peripheral)
         state = .failed("Connection failed: \(error?.localizedDescription ?? "unknown error")")
     }
@@ -286,12 +289,13 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard state == .discovering, consume(.services, peripheral: peripheral) else { return }
         guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == GattIdentifiers.service }) else { fail("Experimental service missing or discovery failed"); return }
+        expectedService = service
         guard beginOperation(.characteristics) else { return }
         peripheral.discoverCharacteristics([GattIdentifiers.version, GattIdentifiers.challenge, GattIdentifiers.exchange, GattIdentifiers.response, GattIdentifiers.control], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard state == .discovering, service.uuid == GattIdentifiers.service, consume(.characteristics, peripheral: peripheral) else { return }
+        guard state == .discovering, service === expectedService, service.uuid == GattIdentifiers.service, consume(.characteristics, peripheral: peripheral) else { return }
         guard error == nil, let found = service.characteristics else { fail("Characteristic discovery failed"); return }
         for characteristic in found { characteristics[characteristic.uuid] = characteristic }
         guard characteristics.count == 5,
