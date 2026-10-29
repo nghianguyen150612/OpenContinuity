@@ -98,8 +98,9 @@ public enum WatchAuthTransportCodec {
             frame.append(contentsOf: transferID)
             frame.append(UInt8(index))
             frame.append((start ? WatchAuthTransport.startFlag : 0) | (end ? WatchAuthTransport.endFlag : 0))
-            frame.append(UInt8(bytes.count & 0xff))
-            frame.append(UInt8((bytes.count >> 8) & 0xff))
+            let totalLength = start ? bytes.count : 0
+            frame.append(UInt8(totalLength & 0xff))
+            frame.append(UInt8((totalLength >> 8) & 0xff))
             frame.append(contentsOf: bytes[low..<high])
             return Data(frame)
         }
