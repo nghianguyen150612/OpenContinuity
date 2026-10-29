@@ -86,7 +86,6 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         central.connect(item.peripheral)
         arm(seconds: 15, token: token, message: "Connection timed out") { [weak self] in
             guard let self, self.generation == token else { return }
-            self.central.cancelPeripheralConnection(item.peripheral)
             self.fail("Connection timed out")
         }
     }
@@ -94,6 +93,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     func disconnect() {
         central.stopScan()
         scanGeneration = nil
+        guard !lifecycle.retiring else { return }
         generationGate.advance()
         clearProtocolState()
         lifecycle.terminate()
