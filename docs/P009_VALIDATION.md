@@ -18,7 +18,7 @@ The new local Rust coverage includes seven portable P009 framing tests, three Bl
 
 ## Hosted CI
 
-The macOS workflow runs the full Swift package suite, asks the Rust CLI to serialize a test-only signed host request into P009 frames, runs a focused Swift reassembly/CryptoKit verification/signing/adversarial test over those exact frames, and asks Rust to reassemble and verify the resulting signed response. Existing P008 Swift-to-Rust fixture verification remains enabled. XcodeGen generates the Watch project and Xcode builds the unsigned watchOS target. Final SHA, run URLs, test counts and conclusions will be recorded after the branch is pushed and both push and PR workflow runs finish.
+Both the push and PR workflows passed at implementation SHA `3febcfca3764d9abc8ac465920f11e0ead1424e0`. The [push run](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40881911861) and [PR run](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40881923256) each passed Rust checks and the macOS job. The full Swift package run executed 20 tests with 0 failures and 1 expected skip (the P009 handoff needs Rust-produced input); the focused Rust → Swift → Rust P009 handoff then passed separately, including tampering, truncation, stale-session and mismatched-key rejection. The existing P008 Swift-to-Rust signature fixture passed. XcodeGen generated the Watch project and the unsigned watchOS build succeeded with Swift 6.1.2, Xcode 16.4 and watchOS SDK 11.5. A documentation-only follow-up will trigger the same checks on its resulting branch head.
 
 The cross-language response uses a deterministic test-only Watch key and a simulated explicit rejection. It does not simulate a physical consent tap or successful LocalAuthentication.
 
@@ -29,7 +29,7 @@ The cross-language response uses a deterministic test-only Watch key and a simul
 | Rust transport framing/reassembly | PASS; local tests cover both directions, 218-frame ceiling, malformed/version/session/owner/order/timeout/cancel/completion failures. |
 | BlueZ P009 service source and bounded owner state | IMPLEMENTED; host registration requires an already powered selected adapter and uses owned-resource cleanup. Live D-Bus registration is NOT RUN here. |
 | CoreBluetooth P009 request/response source | IMPLEMENTED; Apple SDK compile remains pending hosted CI. |
-| Rust → Swift → Rust serialized signed exchange | CI PENDING; fixture test includes tampering, truncation, stale session, and mismatched-key rejection. |
+| Rust → Swift → Rust serialized signed exchange | PASS in both hosted runs; exact serialized frames were reassembled and cryptographically verified. Adversarial cases rejected. |
 | Linux ↔ Watch RF exchange | NOT RUN |
 | Watch SE 2 consent and LocalAuthentication | NOT RUN |
 | Safe independent enrollment and temporary Watch-key injection | BLOCKED; no reviewed setup or app provisioning UI exists. |
