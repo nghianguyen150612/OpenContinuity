@@ -1,6 +1,6 @@
 # P007B — Real BlueZ ↔ Apple Watch Foreground BLE Interoperability Qualification
 
-Status: **STARTED — scope and validation protocol only. Hardware tests NOT RUN.**
+Status: **Diagnostics/runbooks implemented and software CI qualified; physical interoperability BLOCKED / hardware tests NOT RUN. See docs/P007B_VALIDATION.md.**
 Branch: `research/p007b-watch-bluez-physical-interop`
 Base: `main` `1cf956bd7356df2e7e2800da5657c01d12f7b256` (P007/P007A squash merge).
 P007 upstream head: `e7d1d22a1858692fe1d6a1bc9bc770df6f6b2680`, PR #7.
