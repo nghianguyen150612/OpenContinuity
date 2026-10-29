@@ -23,7 +23,7 @@ Record each item independently as PASS, FAIL, BLOCKED or NOT RUN. Attach tool ve
 
 ## Current evidence
 
-No physical Linux BLE adapter, BlueZ system bus, Apple SDK, simulator or Watch SE 2 was available in the implementation environment. Hardware stages remain NOT RUN pending the evidence table in `docs/P007_VALIDATION.md`.
+No physical Linux BLE adapter, BlueZ system bus, simulator runtime or Watch SE 2 was available in the local implementation environment. A hosted macOS runner separately provided the Apple SDK for compile-only qualification. Hardware stages remain NOT RUN pending the evidence table in `docs/P007_VALIDATION.md`.
 
 ## P007A CI coverage
 
