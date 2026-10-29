@@ -26,3 +26,26 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Build
         run: cargo build --workspace
+
+  swift-watchos:
+    name: Swift tests and watchOS compile
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apple toolchain inventory
+        run: |
+          swift --version
+          xcodebuild -version
+          xcodebuild -showsdks
+      - name: Swift codec and lifecycle tests
+        run: swift test --package-path experiments/watchos
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Generate watchOS project
+        run: xcodegen generate --spec experiments/watchos/project.yml
+      - name: Compile watchOS application without signing
+        run: >-
+          xcodebuild -project experiments/watchos/OpenContinuityWatch.xcodeproj
+          -scheme OpenContinuityWatch -configuration Debug
+          -destination 'generic/platform=watchOS'
+          CODE_SIGNING_ALLOWED=NO build

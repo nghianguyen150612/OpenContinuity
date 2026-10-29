@@ -19,6 +19,9 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     @Published private(set) var detail = "Synthetic transport only. No authentication or unlock."
 
     private var central: CBCentralManager!
+    private var lifecycle = GattLifecycle()
+    private var pendingCharacteristic: CBCharacteristic?
+    var canStartScan: Bool { lifecycle.canScan && state != .scanning }
     private var peripheral: CBPeripheral?
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
     private var generationGate = GattGenerationGate()
@@ -39,7 +42,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     func startScan() {
-        guard central.state == .poweredOn else { fail("Bluetooth is not ready"); return }
+        guard central.state == .poweredOn, canStartScan else { return }
         invalidateSession(keepPeripheral: false)
         peripherals.removeAll()
         state = .scanning
@@ -66,7 +69,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     func connect(_ item: ExperimentPeripheral) {
-        guard central.state == .poweredOn, state == .scanning else { return }
+        guard central.state == .poweredOn, state == .scanning, lifecycle.connect(item.id) else { return }
         watchdog?.cancel()
         scanGeneration = nil
         central.stopScan()
@@ -76,6 +79,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         peripheral?.delegate = self
         selectedName = item.name
         state = .connecting
+        _ = lifecycle.begin(.connect)
         central.connect(item.peripheral)
         arm(seconds: 15, token: token, message: "Connection timed out") { [weak self] in
             guard let self, self.generation == token else { return }
@@ -87,16 +91,13 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     func disconnect() {
         central.stopScan()
         scanGeneration = nil
-        guard let peripheral else { resetToIdle(); return }
         generationGate.advance()
-        watchdog?.cancel()
-        central.stopScan()
-        central.cancelPeripheralConnection(peripheral)
         clearProtocolState()
-        self.peripheral = nil
-        state = .disconnected
-        selectedName = "None"
-        characteristics.removeAll()
+        lifecycle.terminate()
+        guard let peripheral else { state = .disconnected; return }
+        // Retain until the terminal delegate event. No new scan may orphan it.
+        state = .disconnecting
+        central.cancelPeripheralConnection(peripheral)
     }
 
     func runTest() {
@@ -122,10 +123,23 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     func applicationDidSuspend() {
-        guard state != .idle && state != .disconnected && state != .completed && state != .cancelled else { return }
         disconnect()
-        state = .cancelled
         detail = "Foreground session ended; session data discarded. Reconnect for a fresh challenge."
+    }
+
+    private func beginOperation(_ operation: GattLifecycle.Operation, characteristic: CBCharacteristic? = nil) -> Bool {
+        guard lifecycle.begin(operation) != nil else { fail("Overlapping BLE operation"); return false }
+        pendingCharacteristic = characteristic
+        return true
+    }
+
+    private func consume(_ operation: GattLifecycle.Operation, peripheral: CBPeripheral, characteristic: CBCharacteristic? = nil) -> Bool {
+        guard peripheral === self.peripheral, let ticket = lifecycle.pending,
+              ticket.operation == operation else { return false }
+        if let characteristic, characteristic !== pendingCharacteristic { return false }
+        guard lifecycle.complete(ticket, peripheral: peripheral.identifier) else { return false }
+        pendingCharacteristic = nil
+        return true
     }
 
     private func writeNextFrame(_ characteristic: CBCharacteristic) {
@@ -135,6 +149,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         let frame = frames[frameIndex]
         guard frame.count <= 20 else { fail("Frame exceeds conservative 20-byte write limit"); return }
         arm(seconds: 8, token: generation, message: "Frame write timed out") { [weak self] in self?.fail("Frame write timed out") }
+        guard beginOperation(.write(characteristic.uuid.uuidString), characteristic: characteristic) else { return }
         peripheral.writeValue(frame, for: characteristic, type: .withResponse)
     }
 
@@ -145,6 +160,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         catch { fail("Could not encode control command"); return }
         state = .awaitingResponse
         arm(seconds: 8, token: generation, message: "Control write timed out") { [weak self] in self?.fail("Control write timed out") }
+        guard beginOperation(.write(control.uuid.uuidString), characteristic: control) else { return }
         peripheral.writeValue(value, for: control, type: .withResponse)
     }
 
@@ -153,6 +169,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         expectedRead = uuid
         state = uuid == GattIdentifiers.version ? .discovering : (uuid == GattIdentifiers.challenge ? .readingChallenge : .awaitingResponse)
         arm(seconds: 8, token: generation, message: "Characteristic read timed out") { [weak self] in self?.fail("Characteristic read timed out") }
+        guard beginOperation(.read(uuid.uuidString), characteristic: characteristic) else { return }
         peripheral.readValue(for: characteristic)
     }
 
@@ -171,6 +188,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         watchdog?.cancel()
         watchdog = nil
         expectedRead = nil
+        pendingCharacteristic = nil
         frames.removeAll()
         frameIndex = 0
         sessionID = nil
@@ -186,6 +204,8 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     private func fail(_ reason: String) {
+        generationGate.advance()
+        lifecycle.terminate()
         watchdog?.cancel()
         clearProtocolState()
         state = .failed(reason)
@@ -198,6 +218,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
 
 extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        guard central === self.central else { return }
         switch central.state {
         case .poweredOn: bluetoothState = "Bluetooth On"
         case .poweredOff: bluetoothState = "Bluetooth Off"; disconnect()
@@ -210,45 +231,59 @@ extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard state == .scanning, scanGeneration == generation, !peripherals.contains(where: { $0.id == peripheral.identifier }) else { return }
+        guard central === self.central, lifecycle.canScan, state == .scanning, scanGeneration == generation, !peripherals.contains(where: { $0.id == peripheral.identifier }) else { return }
         let name = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? "Unnamed Linux peripheral"
         peripherals.append(ExperimentPeripheral(peripheral: peripheral, name: name))
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        guard peripheral === self.peripheral, state == .connecting else { central.cancelPeripheralConnection(peripheral); return }
+        guard central === self.central, state == .connecting, consume(.connect, peripheral: peripheral) else { return }
         watchdog?.cancel()
         state = .discovering
         arm(seconds: 12, token: generation, message: "Service discovery timed out") { [weak self] in self?.fail("Service discovery timed out") }
+        guard beginOperation(.services) else { return }
         peripheral.discoverServices([GattIdentifiers.service])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        guard peripheral === self.peripheral else { return }
-        fail("Connection failed: \(error?.localizedDescription ?? "unknown error")")
+        guard central === self.central, peripheral === self.peripheral else { return }
+        finishDisconnect(peripheral)
+        state = .failed("Connection failed: \(error?.localizedDescription ?? "unknown error")")
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        guard peripheral === self.peripheral else { return }
+        guard central === self.central else { return }
+        finishDisconnect(peripheral)
+    }
+
+    private func finishDisconnect(_ peripheral: CBPeripheral) {
+        guard peripheral === self.peripheral, lifecycle.disconnected(peripheral.identifier) else { return }
         generationGate.advance()
         clearProtocolState()
+        peripheral.delegate = nil
         self.peripheral = nil
         characteristics.removeAll()
+        peripherals.removeAll()
         selectedName = "None"
         state = .disconnected
-        detail = error.map { "Disconnected: \($0.localizedDescription)" } ?? "Disconnected; session discarded."
+        // A new central owns the next cycle. Late central events from the old
+        // instance cannot be applied to a repeated connection to the same ID.
+        central.delegate = nil
+        central = CBCentralManager(delegate: self, queue: .main)
     }
+
 }
 
 extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard peripheral === self.peripheral, state == .discovering else { return }
+        guard state == .discovering, consume(.services, peripheral: peripheral) else { return }
         guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == GattIdentifiers.service }) else { fail("Experimental service missing or discovery failed"); return }
+        guard beginOperation(.characteristics) else { return }
         peripheral.discoverCharacteristics([GattIdentifiers.version, GattIdentifiers.challenge, GattIdentifiers.exchange, GattIdentifiers.response, GattIdentifiers.control], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard peripheral === self.peripheral, state == .discovering, service.uuid == GattIdentifiers.service else { return }
+        guard state == .discovering, service.uuid == GattIdentifiers.service, consume(.characteristics, peripheral: peripheral) else { return }
         guard error == nil, let found = service.characteristics else { fail("Characteristic discovery failed"); return }
         for characteristic in found { characteristics[characteristic.uuid] = characteristic }
         guard characteristics.count == 5,
@@ -261,7 +296,7 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard peripheral === self.peripheral, let expectedRead, characteristic.uuid == expectedRead else { return }
+        guard let expectedRead, characteristic.uuid == expectedRead, consume(.read(characteristic.uuid.uuidString), peripheral: peripheral, characteristic: characteristic) else { return }
         watchdog?.cancel()
         self.expectedRead = nil
         guard error == nil, let value = characteristic.value else { fail("Characteristic read failed"); return }
@@ -287,13 +322,17 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard peripheral === self.peripheral else { return }
+        guard consume(.write(characteristic.uuid.uuidString), peripheral: peripheral, characteristic: characteristic) else { return }
         watchdog?.cancel()
         guard error == nil else { fail("Write failed: \(error!.localizedDescription)"); return }
         if characteristic.uuid == GattIdentifiers.exchange, state == .sendingFrames {
             frameIndex += 1
-            if cancelRequested { sendControl(cancel: true) }
-            else { writeNextFrame(characteristic) }
+            let token = generation
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, self.generation == token, self.state == .sendingFrames else { return }
+                self.writeNextFrame(characteristic)
+            }
         } else if characteristic.uuid == GattIdentifiers.control, state == .awaitingResponse {
             read(GattIdentifiers.response)
         } else { fail("Unexpected write completion") }

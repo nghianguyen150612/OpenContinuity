@@ -18,7 +18,7 @@ struct ContentView: View {
                     Button("Stop Scan") { bluetooth.stopScan() }
                 } else {
                     Button("Start Scan") { bluetooth.startScan() }
-                        .disabled(bluetooth.bluetoothState != "Bluetooth On")
+                        .disabled(bluetooth.bluetoothState != "Bluetooth On" || !bluetooth.canStartScan)
                 }
 
                 ForEach(bluetooth.peripherals) { item in

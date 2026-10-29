@@ -1,0 +1,36 @@
+name: OpenContinuityWatch
+options:
+  deploymentTarget:
+    watchOS: '10.0'
+packages:
+  OpenContinuityProtocol:
+    path: .
+targets:
+  OpenContinuityWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: OpenContinuityWatchApp.swift
+      - path: ContentView.swift
+      - path: WatchBluetoothManager.swift
+      - path: GattIdentifiers.swift
+      - path: GattResearchState.swift
+    dependencies:
+      - package: OpenContinuityProtocol
+        product: OpenContinuityProtocol
+      - sdk: CoreBluetooth.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.opencontinuity.experimental.watch
+        PRODUCT_NAME: OpenContinuity Watch
+        SWIFT_VERSION: '5.0'
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_WKApplication: YES
+        INFOPLIST_KEY_WKWatchOnly: YES
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Connect to an explicitly selected experimental OpenContinuity peripheral.
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  OpenContinuityWatch:
+    build:
+      targets:
+        OpenContinuityWatch: all

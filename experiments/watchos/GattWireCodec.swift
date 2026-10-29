@@ -34,7 +34,7 @@ public enum GattWireCodec {
                                     8: "Message already in progress", 9: "Message exceeds size limit",
                                     10: "Message length mismatch", 11: "Partial message expired",
                                     12: "Message already complete"]
-                return descriptions[code] ?? "Unknown server error code \(code)"
+                return descriptions[Int(code)] ?? "Unknown server error code \(code)"
             }
         }
     }

@@ -3,7 +3,7 @@ import Foundation
 enum GattResearchState: Equatable {
     case idle, scanning, connecting, discovering, readingChallenge
     case ready, sendingFrames, awaitingResponse, completed, cancelled
-    case disconnected, failed(String)
+    case disconnecting, disconnected, failed(String)
 
     var title: String {
         switch self {
@@ -17,6 +17,7 @@ enum GattResearchState: Equatable {
         case .awaitingResponse: "Awaiting synthetic result"
         case .completed: "Transport test completed"
         case .cancelled: "Test cancelled"
+        case .disconnecting: "Disconnecting"
         case .disconnected: "Disconnected"
         case .failed(let reason): "Failed: \(reason)"
         }
