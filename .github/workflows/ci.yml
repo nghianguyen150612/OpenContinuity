@@ -32,13 +32,26 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85.0
       - name: Apple toolchain inventory
         run: |
           swift --version
           xcodebuild -version
           xcodebuild -showsdks
       - name: Swift codec and lifecycle tests
+        env:
+          OC_P008_INTEROP_OUTPUT: ${{ runner.temp }}/watch-auth-response-rust-interop.json
         run: swift test --package-path experiments/watchos
+      - name: Build Rust fixture verifier
+        run: cargo build --bin opencontinuity
+      - name: Verify CryptoKit response signature in Rust
+        run: >-
+          cargo run --bin opencontinuity -- research watch-auth
+          --fixture "$OC_P008_INTEROP_OUTPUT" --json
+        env:
+          OC_P008_INTEROP_OUTPUT: ${{ runner.temp }}/watch-auth-response-rust-interop.json
       - name: Install project generator
         run: brew install xcodegen
       - name: Generate watchOS project

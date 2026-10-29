@@ -20,7 +20,7 @@ P004 adds a separate `MockEnrollmentRecord` trust anchor with host/account/Watch
 
 P005 adds `crates/opencontinuity-core::gatt_wire`, a bounded versioned framing and reassembly contract, plus a Linux-only `apps/opencontinuity-cli/src/gatt.rs` zbus 5.12.0 D-Bus server. `opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]` explicitly exports a GATT ObjectManager, service and characteristics, registers them with `GattManager1`, registers a temporary advertisement through `LEAdvertisingManager1`, and tears down owned resources on timeout/signal/adapter loss. No bus or controller is available in this validation environment, so the real registration path has not been exercised. The portable mock lifecycle model still tests deterministic rollback and ordering; it is not evidence of real BlueZ behavior. Reports retain `authorization: never_evaluated`.
 
-The CLI’s BlueZ adapter remains research-only. P007 adds experimental native watchOS SwiftUI/CoreBluetooth client source under `experiments/watchos/` with a pure protocol codec and a foreground-only GATT session flow. The Apple toolchain and physical hardware behavior remain unverified; this app does not authenticate or authorize. P001 production Bluetooth adapter scaffolding, the Qt6/QML Settings application, host authentication, enrollment persistence and every Linux authorization integration remain absent.
+The CLI’s BlueZ adapter remains research-only. P007 adds experimental native watchOS SwiftUI/CoreBluetooth client source under `experiments/watchos/` with a pure protocol codec and a foreground-only GATT session flow. P008 adds a separate portable `watch_auth_research` module and Swift `WatchAuthProtocol` CryptoKit module for P-256 signed request/response transcripts. It does not reuse or modify GATT v1. Rust and Swift each verify independently pinned, test-only enrollment records; a small SwiftUI LocalAuthentication consent component accepts only a host request already verified by the Swift module. The fixture CLI has no Bluetooth, key-store, account-management or Linux authentication side effects and reports `authorization: never_evaluated`. Hosted Apple SDK compilation and actual cross-language execution remain separate gates. P001 production Bluetooth adapter scaffolding, the Qt6/QML Settings application, persistent enrollment, key custody and every Linux authorization integration remain absent.
 
 ## Planned module boundaries
 
@@ -38,7 +38,7 @@ These are planned boundaries, not P001 placeholder crates. Portable domain decis
 
 ## Doctor contract
 
-`opencontinuity doctor --json` emits `DoctorReport` with `schema_version`, `project`, `version`, `capabilities`, and `watch_auto_unlock_trust`. It reports protocol features as unsupported because no implementation exists. It does not inspect Bluetooth or infer host readiness. The trust stages remain unknown. Consumers should reject unknown schema versions and treat trust as fail-closed.
+`opencontinuity doctor --json` emits `DoctorReport` with `schema_version`, `project`, `version`, `capabilities`, and `watch_auto_unlock_trust`. It reports native Apple integrations as unsupported; the P008 custom research protocol does not change those states. It does not inspect Bluetooth or infer host readiness. The production trust stages remain unknown. Consumers should reject unknown schema versions and treat trust as fail-closed.
 
 ## P006 provisional transport hardening
 

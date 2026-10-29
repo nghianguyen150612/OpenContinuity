@@ -1,6 +1,6 @@
 # Feature Matrix
 
-States describe the P006 provisional branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
+States describe the P008 provisional branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
 
 | Area | State | Evidence / scope |
 | --- | --- | --- |
@@ -13,6 +13,10 @@ States describe the P006 provisional branch build. `unsupported` means no implem
 | P006 session/host qualification | experimental | Bounded per-client synthetic sessions, private D-Bus cleanup tests and read-only inventory; actual controller and Watch interoperability NOT RUN. |
 | Production Bluetooth adapter | unsupported | P001 adapter scaffolding remains incomplete; this isolated research CLI server does not complete it. |
 | Mock enrollment verification | supported | Separate in-memory `MockEnrollmentRecord` binds host/account/Watch identity and algorithm to the expected key. Endpoint key substitution, unknown/revoked enrollment and binding/algorithm mismatch fail closed in Rust tests. Not production enrollment/storage. |
+| P008 signed Watch approval research protocol | experimental | Isolated `OC-WATCH-AUTH-RESEARCH/1` transcript with P-256/SHA-256, strict canonical encoding, role separation, bounded timestamps and test-only independent enrollment pins. Rust unit tests pass; hosted Rust/Swift signature interchange is pending CI. No Linux authorization. |
+| P008 fixture verifier CLI | experimental | `opencontinuity research watch-auth --fixture <path> [--json]` verifies signed test-only request and response fixtures with no system side effects. Every report says `authorization: never_evaluated`. |
+| Swift P008 CryptoKit codec and signing | experimental source | `WatchAuthProtocol.swift` matches the Rust transcript and shared public-key/signature formats; Rust-signed request fixture is tested by Swift and CryptoKit-generated response is sent to Rust in hosted CI. Local Apple toolchain is unavailable in this environment. |
+| Foreground P008 consent component | experimental source | `ResearchConsentView` requires a verified request and explicit choice; approval checks public `.deviceOwnerAuthentication` support and fails closed. It is not connected to GATT v1. Apple compilation and SE 2 LocalAuthentication behavior remain pending/unverified. |
 | watchOS foreground research client | experimental source | SwiftUI/CoreBluetooth app and pure wire codec source exist under `experiments/watchos/`; no Apple compilation, signing, simulator, or physical Watch test is claimed. |
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
 | Apple Watch SE 2 Auto Unlock, native protocol | unsupported | P002 research found public third-party enrollment/STS support blocked. Trust stages are unknown; no OS unlock behavior. |
@@ -23,9 +27,9 @@ States describe the P006 provisional branch build. `unsupported` means no implem
 | Foreground Watch BLE discovery | experimental source | Scan is explicit and filtered to the P006 service; no real peripheral was available for validation. |
 | Watch direct BLE endpoint | blocked / unknown | Apple documents Watch central-to-peripheral communication and explicitly blocks Watch `CBPeripheralManager` advertising. Foreground central is a feasible test candidate; background/hands-free listener remains blocked. No physical test. See P003 matrices. |
 | Watch–iPhone relay endpoint | experimental | WatchConnectivity supports paired-app messaging with live reachability requirements and queued, non-immediate background delivery. No relay app or Linux transport implemented; phone never substitutes for Watch identity. |
-| Foreground Watch confirmation | experimental | Public Local Authentication wrist-detection policy (watchOS 9+) can accompany explicit foreground action. No Apple build or SE 2 test; no third-party biometric or Touch ID claim. |
-| Apple Watch Auto Unlock feasibility | blocked / unknown | Native Linux interoperation remains blocked on a public third-party enrollment/STS endpoint; undocumented feasibility and SE 2-specific behavior remain unknown. A separate foreground confirmation protocol is not native Auto Unlock and remains unimplemented. |
-| Device identity, cryptographic authentication, freshness, proximity, readiness | unknown | No trust protocol or assessment exists. Nearby signals never imply authorization. |
+| Foreground Watch confirmation | experimental | Public `.deviceOwnerAuthentication` is listed for watchOS; P008 checks runtime support after explicit user action. No Apple build or SE 2 test; no third-party biometric or Touch ID claim. |
+| Apple Watch Auto Unlock feasibility | blocked / unknown | Native Linux interoperation remains blocked on a public third-party enrollment/STS endpoint; undocumented feasibility and SE 2-specific behavior remain unknown. P008 is a separate custom research protocol, not native Auto Unlock. |
+| Production device identity, secure key custody, persistent replay state, proximity, readiness | unknown | P008 only demonstrates software signatures under test-only pins. Genuine Watch identity, hardware-backed custody, durable replay state and proximity are not established. |
 | Qt 6/QML Settings UI | unsupported | P001 Settings framework remains absent; a GATT research command does not complete the UI. |
 
-Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No Apple communication or production authentication feature is implemented.
+Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No native Apple protocol or production authentication feature is implemented.

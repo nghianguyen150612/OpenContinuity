@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "now_ms": 1800000000600,
+  "host_enrollment": {
+    "enrollment_id": "host-enrollment-test-01",
+    "host_identity": "linux-host-test-01",
+    "linux_uid": 1000,
+    "public_key_sec1_hex": "046ff03b949241ce1dadd43519e6960e0a85b41a69a05c328103aa2bce1594ca163c4f753a55bf01dc53f6c0b0c7eee78b40c6ff7d25a96e2282b989cef71c144a",
+    "key_algorithm": "p256_ecdsa_sha256",
+    "key_version": 1,
+    "state": "active",
+    "test_only": true
+  },
+  "watch_enrollment": {
+    "enrollment_id": "watch-enrollment-test-01",
+    "watch_identity": "watch-se2-test-01",
+    "bound_host_enrollment_id": "host-enrollment-test-01",
+    "bound_host_identity": "linux-host-test-01",
+    "bound_linux_uid": 1000,
+    "public_key_sec1_hex": "04550f471003f3df97c3df506ac797f6721fb1a1fb7b8f6f83d224498a65c88e24136093d7012e509a73715cbd0b00a3cc0ff4b5c01b3ffa196ab1fb327036b8e6",
+    "key_algorithm": "p256_ecdsa_sha256",
+    "key_version": 1,
+    "state": "active",
+    "test_only": true
+  },
+  "request": {
+    "canonical_hex": "4f4357410101010017686f73742d656e726f6c6c6d656e742d746573742d303100126c696e75782d686f73742d746573742d3031000003e8001877617463682d656e726f6c6c6d656e742d746573742d3031313131313131313131313131313131315252525252525252525252525252525252525252525252525252525252525252000001a3185c5000000001a3185d3a60001572657365617263685f636f6e6669726d6174696f6e",
+    "signature_raw_hex": "f92ba9335e1f522706f4f6f60eff18323c44fde68e421cb82a731a1ab4bd4900335c80de2cfbfade04eaab527b4abe4a37c36f947527e37e31b9afcffc449b60"
+  },
+  "response": null
+}
