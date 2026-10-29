@@ -25,3 +25,7 @@ A successful digest proves only that the experimental server returned a hash of 
 `CI / Swift tests and watchOS compile` runs independently of Linux Rust checks on `macos-15`. It inventories Swift/Xcode/SDKs, runs the 9 package tests with CryptoKit, generates the project and compiles the Watch application without signing. Initial qualification passed with Xcode 16.4 / watchOS 11.5 / Swift 6.1.2. Physical radio, simulator runtime and Watch installation are separate gates.
 
 Start Scan is disabled and rejected in the manager while any connection is owned. Disconnect retains that peripheral until a terminal callback; suspension performs the same cleanup even after Completed/Cancelled. `GattLifecycle` is the tested pure ownership gate. Operations are serialized and characteristic identity is checked. Connection-specific delegate generations and central replacement reject old connection callbacks.
+
+## P007B physical trial
+
+See `docs/research/P007B_APPLE_SIGNED_INSTALL.md` for the explicit signing override (the generated CI target disables signing), and `P007B_REAL_BLE_RUNBOOK.md` for the owned-host procedure. Diagnostics is disabled by default; enable it before a trial to see up to 64 allowlisted metadata events, including actual challenge/result lengths and frame acknowledgements. Disabling it clears the in-memory trace. It never stores payload bytes or device identifiers. The visible trace always includes `authorization: never_evaluated`. Physical long reads and RF interoperability remain unverified.

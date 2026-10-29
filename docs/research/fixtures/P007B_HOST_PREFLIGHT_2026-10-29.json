@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "authorization": "never_evaluated",
+  "timestamp_utc": "2026-10-29T08:09:29.871403+00:00",
+  "kernel_release": "6.18.55",
+  "machine": "x86_64",
+  "probes": {
+    "kernel_inventory": {
+      "status": "PASS",
+      "exit_code": 0
+    },
+    "bluez_cli_version": {
+      "status": "BLOCKED",
+      "reason": "command_unavailable"
+    },
+    "controller_list": {
+      "status": "BLOCKED",
+      "reason": "command_unavailable"
+    },
+    "bluetooth_service": {
+      "status": "FAIL",
+      "exit_code": 1
+    },
+    "management_info": {
+      "status": "BLOCKED",
+      "reason": "command_unavailable"
+    },
+    "bluez_dbus_tree": {
+      "status": "FAIL",
+      "exit_code": 1
+    },
+    "existing_host_qualification": {
+      "status": "PASS",
+      "exit_code": 0
+    }
+  },
+  "interpretation": "command_results_only_not_hardware_qualification",
+  "physical_trial": "NOT RUN",
+  "raw_output": "discarded_identifiers_not_published"
+}
