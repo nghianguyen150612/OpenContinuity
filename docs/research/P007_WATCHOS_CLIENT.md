@@ -17,3 +17,9 @@ The source requires a watchOS 10 or later target, Swift 5.9 or later, SwiftUI, C
 This is non-authorizing synthetic transport. The challenge is not a Watch authentication nonce; the digest is not a signature, MAC, identity proof, wearer-presence proof, distance bound, or unlock approval. No pairing is triggered, no Apple private APIs or account material are used, and no Linux authorization integration is present. P003/P004 mock Ed25519 signing remains separate.
 
 Compilation, simulator execution, Apple signing, Linux BlueZ hardware, RF advertising, and Apple Watch SE 2 trials are recorded in `docs/P007_VALIDATION.md` and the hardware plan.
+
+## P007A CI coverage
+
+Hosted `macos-15` CI now runs the production Swift package (9 XCTest cases: 4 lifecycle and 5 codec), including CryptoKit verification of the Rust-generated fixture, and an actual unsigned watchOS compile from `experiments/watchos/project.yml`. Initial evidence: [run 40805562115](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40805562115), Xcode 16.4 / watchOS SDK 11.5 / Swift 6.1.2, all checks PASS. This supersedes the earlier Apple-compilation/Swift-test NOT RUN statements above; physical hardware and simulator runtime remain NOT RUN. Long GATT reads on the Watch/BlueZ combination remain UNKNOWN. See P007_VALIDATION for final qualification details.
+
+The manager denies new scans during owned connections, retains the peripheral through disconnect completion, clears synthetic data on every foreground loss, and uses explicit pending operation ownership. The pure lifecycle tests cover scan denial during active operations, background cleanup with and without pending work, disconnect during writes/result reads, old and duplicate tickets, same-peripheral reconnect and rapid repeated cycles. Fake lifecycle events do not establish CoreBluetooth behavior over RF.

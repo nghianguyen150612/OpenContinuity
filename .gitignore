@@ -4,3 +4,6 @@
 *.pcapng
 *.irk
 *.irkey
+
+/experiments/watchos/.build/
+/experiments/watchos/OpenContinuityWatch.xcodeproj/

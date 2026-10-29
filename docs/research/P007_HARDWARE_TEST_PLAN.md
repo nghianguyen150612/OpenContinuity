@@ -24,3 +24,9 @@ Record each item independently as PASS, FAIL, BLOCKED or NOT RUN. Attach tool ve
 ## Current evidence
 
 No physical Linux BLE adapter, BlueZ system bus, Apple SDK, simulator or Watch SE 2 was available in the implementation environment. Hardware stages remain NOT RUN pending the evidence table in `docs/P007_VALIDATION.md`.
+
+## P007A CI coverage
+
+Hosted `macos-15` CI now runs the production Swift package (9 XCTest cases: 4 lifecycle and 5 codec), including CryptoKit verification of the Rust-generated fixture, and an actual unsigned watchOS compile from `experiments/watchos/project.yml`. Initial evidence: [run 40805562115](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40805562115), Xcode 16.4 / watchOS SDK 11.5 / Swift 6.1.2, all checks PASS. This supersedes the earlier Apple-compilation/Swift-test NOT RUN statements above; physical hardware and simulator runtime remain NOT RUN. Long GATT reads on the Watch/BlueZ combination remain UNKNOWN. See P007_VALIDATION for final qualification details.
+
+The manager denies new scans during owned connections, retains the peripheral through disconnect completion, clears synthetic data on every foreground loss, and uses explicit pending operation ownership. The pure lifecycle tests cover scan denial during active operations, background cleanup with and without pending work, disconnect during writes/result reads, old and duplicate tickets, same-peripheral reconnect and rapid repeated cycles. Fake lifecycle events do not establish CoreBluetooth behavior over RF.

@@ -21,6 +21,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var lifecycle = GattLifecycle()
     private var pendingCharacteristic: CBCharacteristic?
+    private var connectionDelegate: ConnectionDelegate?
     var canStartScan: Bool { lifecycle.canScan && state != .scanning }
     private var peripheral: CBPeripheral?
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
@@ -76,7 +77,9 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         generationGate.advance()
         let token = generation
         peripheral = item.peripheral
-        peripheral?.delegate = self
+        let delegate = ConnectionDelegate(owner: self, generation: lifecycle.generation)
+        connectionDelegate = delegate
+        peripheral?.delegate = delegate
         selectedName = item.name
         state = .connecting
         _ = lifecycle.begin(.connect)
@@ -131,6 +134,10 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         guard lifecycle.begin(operation) != nil else { fail("Overlapping BLE operation"); return false }
         pendingCharacteristic = characteristic
         return true
+    }
+
+    fileprivate func acceptsDelegate(_ epoch: UInt64, peripheral: CBPeripheral) -> Bool {
+        peripheral === self.peripheral && lifecycle.generation == epoch && !lifecycle.retiring
     }
 
     private func consume(_ operation: GattLifecycle.Operation, peripheral: CBPeripheral, characteristic: CBCharacteristic? = nil) -> Bool {
@@ -261,6 +268,7 @@ extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
         generationGate.advance()
         clearProtocolState()
         peripheral.delegate = nil
+        connectionDelegate = nil
         self.peripheral = nil
         characteristics.removeAll()
         peripherals.removeAll()
@@ -346,5 +354,39 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
     private func clearProtocolStatePreservingResult() {
         watchdog?.cancel(); watchdog = nil
         sessionID = nil; frames.removeAll(); expectedRead = nil; cancelRequested = false
+    }
+}
+
+// A delegate belongs to one connection lifetime, even when CoreBluetooth returns
+// the same CBPeripheral object again. Its captured epoch is never reassigned.
+@MainActor
+private final class ConnectionDelegate: NSObject {
+    weak var owner: WatchBluetoothManager?
+    let generation: UInt64
+    init(owner: WatchBluetoothManager, generation: UInt64) {
+        self.owner = owner
+        self.generation = generation
+    }
+    private func active(_ peripheral: CBPeripheral) -> WatchBluetoothManager? {
+        guard let owner, owner.acceptsDelegate(generation, peripheral: peripheral) else { return nil }
+        return owner
+    }
+}
+
+extension ConnectionDelegate: @preconcurrency CBPeripheralDelegate {
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        active(peripheral)?.peripheral(peripheral, didDiscoverServices: error)
+    }
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        active(peripheral)?.peripheral(peripheral, didDiscoverCharacteristicsFor: service, error: error)
+    }
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        active(peripheral)?.peripheral(peripheral, didUpdateValueFor: characteristic, error: error)
+    }
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        active(peripheral)?.peripheral(peripheral, didWriteValueFor: characteristic, error: error)
+    }
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        active(peripheral)?.peripheral(peripheral, didModifyServices: invalidatedServices)
     }
 }

@@ -1,6 +1,22 @@
-# P007 validation
+# P007 / P007A validation
 
 `authorization: never_evaluated`
+
+## P007A qualification (2026-10-29)
+
+The P007A results supersede the historical P007 source-only status below. Starting head `bfc6c88e272f86b7c8dbdc411848faed09ab42ad` and preserved commit `1085a26b238ce911ff4eecb139a4a3c5b394fc86` remain ancestors.
+
+- Local Rust 1.85: fmt, Clippy, all 75 workspace tests and build PASS; diff check PASS.
+- [Hosted Apple/Rust CI](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40805562115) on `863a81b4e954210ae0fac9ae26d24a62ea19b114`: PASS.
+- Apple Swift 6.1.2 (`swiftlang-6.1.2.1.2`); Xcode 16.4, build 16F6; watchOS SDK 11.5.
+- Swift package: 9 XCTest tests PASS (4 lifecycle, 5 codec), including shared Rust fixture validation with CryptoKit.
+- XcodeGen 2.46.0 generated the application from `experiments/watchos/project.yml`. Scheme `OpenContinuityWatch`, Debug, `generic/platform=watchOS`, deployment target 10.0, `CODE_SIGNING_ALLOWED=NO`: BUILD SUCCEEDED using the actual Apple SDK. This compile does not install or run the app.
+- PR #7 remains draft while the final connection-delegate change is qualified; final pushed SHA and CI conclusions appear in the delivery report.
+- Physical Linux BlueZ, Apple Watch SE 2, paired iPhone and simulator execution remain NOT RUN. CoreBluetooth long-read delivery over RF remains UNKNOWN.
+
+The lifecycle tests exercise the production pure ownership model, including active-operation scan denial, terminal-event draining, same-ID reconnect, stale/duplicate ticket rejection, and 100 repeated cancel/timeout/reconnect cycles. They do not simulate Apple's radio or delegate delivery internals. Pending operations enforce peripheral, operation kind and exact characteristic object ownership. A per-connection delegate captures an immutable generation; a new central instance after the terminal connection event separates subsequent lifetimes. CoreBluetooth provides no custom operation ID in write callbacks: within a connection, the adapter relies on the documented single completion for each serialized write-with-response. It does not invent an ATT transaction ID or retry a timed-out write in a new operation. A missing terminal connection callback leaves scanning blocked rather than abandoning the connection.
+
+## Historical P007 results (before P007A)
 
 ## Revision and source status
 
