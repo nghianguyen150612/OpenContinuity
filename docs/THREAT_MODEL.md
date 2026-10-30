@@ -64,5 +64,23 @@ Bounded opt-in timing diagnostics, strict evidence manifests and unsigned develo
 build artifacts support physical qualification. Physical Watch/Arch BLE, signed
 exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
 workspace. Simulation and CI do not establish hardware compatibility. Both research
-wire formats and the 60-second signed bound remain unchanged. No Linux authorization
-or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+
+## P011 read-only desktop exposure
+
+The Settings application adds untrusted child-process JSON at a narrow desktop
+boundary. It runs only a sibling or explicitly selected trusted absolute CLI with
+fixed `doctor --json` arguments, no shell/PATH lookup or arbitrary command field.
+A 3-second timeout, 16 KiB stdout/4 KiB stderr caps, strict v1/enum/field/duplicate
+validation, stale-data warnings, generation checks and cancellation bound normal
+failure paths. Raw stderr is never shown; validated strings use QML plain text.
+The GUI has no D-Bus/Bluetooth/authentication integration, key generation,
+telemetry, daemon activation or automatic research server action. See
+[bridge threat boundary](research/P011_DOCTOR_BRIDGE.md).
+
+The selected executable and system Qt/plugin installation remain trusted local
+code. The process bridge is not a sandbox and does not authenticate a replaced
+binary or cryptographically attest its capability claims. Normal QProcess/OS pipe
+buffering is not a strict whole-process memory quota. A compromised local CLI or
+Qt plugin is outside this presentation boundary. No reported state authorizes
+Linux; `authorization: never_evaluated` and hardware NO-GO remain visible.

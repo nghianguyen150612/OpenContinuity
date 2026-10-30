@@ -60,5 +60,16 @@ Bounded opt-in timing diagnostics, strict evidence manifests and unsigned develo
 build artifacts support physical qualification. Physical Watch/Arch BLE, signed
 exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
 workspace. Simulation and CI do not establish hardware compatibility. Both research
-wire formats and the 60-second signed bound remain unchanged. No Linux authorization
-or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+
+## P011 — Native Settings foundation (provisional)
+
+The original roadmap is still unavailable. P011 closes the missing runnable
+Settings foundation with independent Qt 6/QML/C++20 code and a strict read-only
+DoctorReport v1 process bridge. Eight pages, accessible keyboard navigation,
+light/dark palette colors, bounded errors/stale state, native Qt tests, an actual
+window smoke test, desktop installation and a separate Linux Qt CI job are
+implemented. Production device discovery, Apple protocols and auth integration
+remain excluded. P010 physical qualification stays NO-GO. P012 has not begun.
+See [scope](research/P011_SETTINGS_FOUNDATION_SCOPE.md) and
+[validation](P011_VALIDATION.md). Earlier absence statements are historical.

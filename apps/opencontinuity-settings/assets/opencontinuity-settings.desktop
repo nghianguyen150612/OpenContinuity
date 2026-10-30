@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenContinuity Settings
+Comment=Read-only Apple ecosystem capability status
+Exec=opencontinuity-settings
+Icon=opencontinuity-settings
+Terminal=false
+Categories=Settings;Utility;
+StartupWMClass=opencontinuity-settings

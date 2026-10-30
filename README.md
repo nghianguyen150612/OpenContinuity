@@ -34,7 +34,7 @@ The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SI
 
 ## Architecture
 
-`crates/opencontinuity-core` contains portable capability and trust contracts. The CLI presents the report; the daemon currently provides a nonprivileged lifecycle only. OS adapters, protocol implementations and the Settings UI are future modules and must remain outside portable core. Read [Architecture](docs/ARCHITECTURE.md) and [Threat Model](docs/THREAT_MODEL.md) before adding sensitive functionality.
+`crates/opencontinuity-core` contains portable capability and trust contracts. The CLI presents the report; the daemon currently provides a nonprivileged lifecycle only. The native Qt 6/QML Settings application lives in `apps/opencontinuity-settings/` and reads the CLI through a bounded C++ bridge. OS adapters and protocol implementations remain separate future modules outside portable core. Read [Architecture](docs/ARCHITECTURE.md) and [Threat Model](docs/THREAT_MODEL.md) before adding sensitive functionality.
 
 ## Project policies
 
@@ -48,7 +48,7 @@ OpenContinuity is MIT-licensed, as established by the repository's original [LIC
 
 ### P008 provisional signed approval research
 
-P008 adds Rust P-256 request/response verification, CryptoKit-compatible Swift transcripts, test-only independent enrollment pins and a foreground LocalAuthentication consent component that is separate from GATT v1. The component does not unlock Linux. Hosted Apple compilation and physical Watch/BlueZ behavior remain separate gates. See the [protocol](docs/research/P008_AUTH_PROTOCOL.md), [enrollment boundaries](docs/research/P008_ENROLLMENT_TRUST.md), [consent research](docs/research/P008_WATCH_CONSENT.md), [security review](docs/research/P008_SECURITY_REVIEW.md) and [validation](docs/P008_VALIDATION.md). The missing original Foundation/Settings roadmap, production adapter and Qt6/QML framework remain unresolved.
+P008 adds Rust P-256 request/response verification, CryptoKit-compatible Swift transcripts, test-only independent enrollment pins and a foreground LocalAuthentication consent component that is separate from GATT v1. The component does not unlock Linux. Hosted Apple compilation and physical Watch/BlueZ behavior remain separate gates. See the [protocol](docs/research/P008_AUTH_PROTOCOL.md), [enrollment boundaries](docs/research/P008_ENROLLMENT_TRUST.md), [consent research](docs/research/P008_WATCH_CONSENT.md), [security review](docs/research/P008_SECURITY_REVIEW.md) and [validation](docs/P008_VALIDATION.md). The original roadmap remains unavailable and the production adapter is unresolved. P011 now provides the separate Qt6/QML Settings foundation.
 
 ### P007B physical BLE qualification infrastructure
 
@@ -60,5 +60,20 @@ Bounded opt-in timing diagnostics, strict evidence manifests and unsigned develo
 build artifacts support physical qualification. Physical Watch/Arch BLE, signed
 exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
 workspace. Simulation and CI do not establish hardware compatibility. Both research
-wire formats and the 60-second signed bound remain unchanged. No Linux authorization
-or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](docs/P010_VALIDATION.md).
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization is implemented; `authorization: never_evaluated`. See [P010 validation](docs/P010_VALIDATION.md).
+
+## P011 native Settings (provisional)
+
+A real `opencontinuity-settings` Qt 6/QML desktop application now provides Overview,
+Devices, Apple Watch, AirDrop, AirPods, Continuity, Research Lab / Diagnostics and
+About pages. The C++20 backend runs only the static `opencontinuity doctor --json`
+command asynchronously with strict schema/size/deadline validation. Unsupported
+features remain unsupported; no devices, battery readings, transfers or unlock are
+invented. Devices has an honest missing-adapter state. No enabled protocol toggles,
+Bluetooth scans, daemon control or research server startup are provided.
+
+See [Settings build/install instructions](apps/opencontinuity-settings/README.md),
+[architecture](docs/research/P011_SETTINGS_ARCHITECTURE.md),
+[desktop dependencies and tests](docs/research/P011_DESKTOP_BUILD_AND_TEST.md) and
+[P011 validation](docs/P011_VALIDATION.md). P010 hardware qualification remains
+**NO-GO**. P012 has not begun.

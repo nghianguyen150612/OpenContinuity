@@ -1,6 +1,6 @@
 # Feature Matrix
 
-States describe the P009 provisional branch build. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
+States include the P011 provisional Settings foundation; earlier research rows retain their recorded evidence scope. `unsupported` means no implementation is present; `unknown` means the implementation has not established the fact. Research status is separate from protocol support.
 
 | Area | State | Evidence / scope |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ States describe the P009 provisional branch build. `unsupported` means no implem
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
 | Apple Watch SE 2 Auto Unlock, native protocol | unsupported | P002 research found public third-party enrollment/STS support blocked. Trust stages are unknown; no OS unlock behavior. |
 | AirDrop via native AWDL | unsupported | No AWDL or AirDrop implementation. |
-| AirPods Pro 3 AAP/AACP and Settings | unsupported | No device protocol or UI implementation. |
+| AirPods Pro 3 AAP/AACP and Settings | unsupported | No device protocol implementation. P011 offers only a truthful status page, not AirPods settings operations. |
 | AirPods automatic switching | unsupported | Not implemented. |
 | AirPlay, HomeKit, iCloud, remaining Continuity | unsupported | Not implemented. |
 | Foreground Watch BLE discovery | experimental source | Scan is explicit and filtered to the P006 service; no real peripheral was available for validation. |
@@ -34,7 +34,7 @@ States describe the P009 provisional branch build. `unsupported` means no implem
 | Foreground Watch confirmation | experimental | Public `.deviceOwnerAuthentication` is listed for watchOS; P008 checks runtime support after explicit user action. No Apple build or SE 2 test; no third-party biometric or Touch ID claim. |
 | Apple Watch Auto Unlock feasibility | blocked / unknown | Native Linux interoperation remains blocked on a public third-party enrollment/STS endpoint; undocumented feasibility and SE 2-specific behavior remain unknown. P008 is a separate custom research protocol, not native Auto Unlock. |
 | Production device identity, secure key custody, persistent replay state, proximity, readiness | unknown | P008 only demonstrates software signatures under test-only pins. Genuine Watch identity, hardware-backed custody, durable replay state and proximity are not established. |
-| Qt 6/QML Settings UI | unsupported | P001 Settings framework remains absent; a GATT research command does not complete the UI. |
+| Qt 6/QML Settings UI | supported | P011 native Linux window, eight pages, bounded read-only DoctorReport bridge, Qt tests and desktop installer. This does not implement native Apple protocols or device discovery. |
 
 Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No native Apple protocol or production authentication feature is implemented.
 
@@ -44,5 +44,12 @@ Bounded opt-in timing diagnostics, strict evidence manifests and unsigned develo
 build artifacts support physical qualification. Physical Watch/Arch BLE, signed
 exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
 workspace. Simulation and CI do not establish hardware compatibility. Both research
-wire formats and the 60-second signed bound remain unchanged. No Linux authorization
-or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+
+## P011 evidence boundary
+
+Qt/C++/QML compilation, runtime navigation and report validation are desktop
+software gates; see [P011 validation](P011_VALIDATION.md). Wayland/X11 use normal
+Qt plugins but real compositor qualification is separate from offscreen tests.
+P007–P010 research remains informational, hardware unverified and production
+unsupported. No Linux unlock or authorization is available.
