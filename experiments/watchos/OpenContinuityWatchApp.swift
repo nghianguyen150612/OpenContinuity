@@ -9,7 +9,7 @@ struct OpenContinuityWatchApp: App {
         WindowGroup {
             ContentView(bluetooth: bluetooth)
                 .onChange(of: scenePhase) { _, phase in
-                    if phase != .active { bluetooth.applicationDidSuspend() }
+                    if phase == .background { bluetooth.applicationDidSuspend() }
                 }
         }
     }

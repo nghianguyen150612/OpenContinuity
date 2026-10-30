@@ -1,15 +1,18 @@
 # OpenContinuity Watch experiment
 
-This is an experimental foreground watchOS BLE client for the non-authorizing P006 GATT transport, plus an isolated P008 signed approval research component. The GATT UI offers explicit scan, connect, synthetic trial, cancel and disconnect controls. The P008 consent view accepts only a separately verified request and is not connected to GATT v1. Neither path contains a Linux unlock action.
+This is an experimental foreground watchOS BLE client for the non-authorizing P006 GATT transport, plus isolated P008 signed approval and P009 authenticated research transport. The GATT UI offers explicit scan, connect, synthetic trial, cancel and disconnect controls. A separate **Authenticated Research** screen creates an ephemeral CryptoKit P-256 Watch key, imports and independently verifies a Linux host public pin, exports the public Watch enrollment, requires explicit confirmation of both fingerprints, and then enables P009 scan/connect. A verified signed request is shown in `ResearchConsentView`; approval requires an explicit action and successful LocalAuthentication. No unverified request can present consent. Neither path contains a Linux unlock action.
 
 ## Source layout
 
 - `OpenContinuityWatchApp.swift`, `ContentView.swift`: SwiftUI entry point and interface.
-- `WatchBluetoothManager.swift`: retained CoreBluetooth central/peripheral delegates, explicit filtered scan, characteristic validation, sequential acknowledged writes and bounded deadlines.
+- `WatchBluetoothManager.swift`: retained CoreBluetooth central/peripheral delegates, separate filtered P006/P009 scans, characteristic validation, sequential acknowledged writes, P009 GET/read/ACK delivery, P008 verification/consent gating, and bounded deadlines.
 - `GattIdentifiers.swift`, `GattResearchState.swift`: exact UUIDs and research flow states.
 - `GattWireCodec.swift`: Foundation/CryptoKit-only P006 codec.
 - `WatchAuthProtocol.swift`: isolated P-256/SHA-256 canonical transcripts, independent test enrollment verification, raw signatures and replay/expiry checks for P008.
-- `ResearchConsentView.swift`: explicit foreground approve/reject view for an already verified P008 request. Approval checks LocalAuthentication at runtime; it is not presented automatically and does not store its in-memory research signing key.
+- `WatchAuthTransport.swift`: P009-only signed-envelope framing, strict transfer assembly, owner/session checks, explicit completion and GET/read/ACK cursor used by the CoreBluetooth manager.
+- `P009ResearchEnrollment.swift`: strict test-only host pin validation, public Watch enrollment export schema and SHA-256 fingerprint helpers.
+- `AuthenticatedResearchView.swift`: explicit test enrollment, dual fingerprint confirmation, host selection, cancellation and cleanup UI.
+- `ResearchConsentView.swift`: explicit foreground approve/reject view for an already verified P008 request. Approval checks LocalAuthentication at runtime and is never presented automatically.
 - `Tests/OpenContinuityWatchTests/`: deterministic codec tests and shared JSON vector.
 
 ## Build setup
@@ -24,10 +27,14 @@ A successful digest proves only that the experimental server returned a hash of 
 
 ## P008 signed approval research
 
-`WatchAuthProtocol.swift` uses CryptoKit P-256 signatures over the shared `OC-WATCH-AUTH-RESEARCH/1` canonical messages. Host keys must come from an independently pinned test enrollment before `VerifiedHostRequest` can be created. `ResearchConsentView` is an app component for a parent that presents it only after a user starts a test and verifies the signed request. It uses public `.deviceOwnerAuthentication` policy support checking, shows **Research confirmation — does not unlock Linux.**, and produces no signature on cancellation, denial, unsupported policy or expiry. The test signing key is supplied in memory and is not persisted. This component is not connected to the P006/P007 GATT v1 transport. See the P008 protocol and consent research documents; real device behavior remains unverified.
+`WatchAuthProtocol.swift` uses CryptoKit P-256 signatures over the shared `OC-WATCH-AUTH-RESEARCH/1` canonical messages. Host keys must come from an independently pinned test enrollment before `VerifiedHostRequest` can be created. The P009 manager presents `ResearchConsentView` only after a user starts the authenticated flow and the signed request verifies. It uses public `.deviceOwnerAuthentication` policy support checking, shows **Research confirmation — does not unlock Linux.**, and produces no signature on cancellation, denial, unsupported policy or expiry. The ephemeral Watch signing key stays in app memory for the active test and is cleared after terminal cleanup or app backgrounding. Only public key material is exported; no private key is embedded or persisted by the app. Real device behavior remains unverified.
+
+## P009 transport research
+
+`WatchAuthTransport.swift` mirrors the Rust 15-byte header: `OA`, version, 8-byte transfer ID, sequence, flags, and little-endian total length on frame zero. The envelope is canonical P008 message bytes plus the 64-byte raw detached signature. At ATT MTU 23, frame payload is five bytes and 1,088 bytes fit in 218 frames. Host delivery uses explicit GET, a small read, then ACK; CoreBluetooth reads never implicitly choose or advance an offset. The Watch manager waits for each response write with response before sending the next. Request transfer is bounded to 20 seconds, consent to 25 seconds, response delivery to 15 seconds, and each callback/inactivity interval to 8 seconds, all clamped by signed expiry. CI uses test-only enrollment and simulates a signed rejection; that software choice does not represent physical LocalAuthentication. See [P009 design](../../docs/research/P009_AUTH_TRANSPORT_DESIGN.md), [temporary enrollment](../../docs/research/P009A_TEMPORARY_ENROLLMENT.md), [security review](../../docs/research/P009A_SECURITY_REVIEW.md), and [validation](../../docs/P009A_VALIDATION.md).
 
 ## P007A CI and lifecycle
 
-`CI / Swift tests and watchOS compile` runs independently of Linux Rust checks on `macos-15`. It inventories Swift/Xcode/SDKs, runs the 9 package tests with CryptoKit, generates the project and compiles the Watch application without signing. Initial qualification passed with Xcode 16.4 / watchOS 11.5 / Swift 6.1.2. Physical radio, simulator runtime and Watch installation are separate gates.
+`CI / Swift tests and watchOS compile` runs independently of Linux Rust checks on `macos-15`. It inventories Swift/Xcode/SDKs, runs the CryptoKit protocol, transport and enrollment test suite, generates the project and compiles the Watch application without signing. Physical radio, simulator runtime and Watch installation are separate gates.
 
 Start Scan is disabled and rejected in the manager while any connection is owned. Disconnect retains that peripheral until a terminal callback; suspension performs the same cleanup even after Completed/Cancelled. `GattLifecycle` is the tested pure ownership gate. Operations are serialized and characteristic identity is checked. Connection-specific delegate generations and central replacement reject old connection callbacks.

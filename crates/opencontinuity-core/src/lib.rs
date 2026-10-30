@@ -9,6 +9,7 @@ pub mod bluez_research;
 pub mod gatt_wire;
 pub mod research;
 pub mod watch_auth_research;
+pub mod watch_auth_transport;
 pub mod watch_endpoint;
 
 /// The evidence-backed state of a capability or trust stage.

@@ -450,4 +450,19 @@ final class WatchAuthProtocolTests: XCTestCase {
             replayGuard: &replayGuard
         )) { XCTAssertEqual($0 as? WatchAuthError, .replay) }
     }
+
+    func testApprovalAfterLocalAuthenticationPastSignedExpiryIsRejected() throws {
+        let token = try verifiedRequest()
+        let expiresAt = token.request.expiresAtMilliseconds
+        XCTAssertThrowsError(try WatchAuthProtocol.signWatchResponse(
+            verifiedRequest: token,
+            enrollment: watchEnrollment,
+            signingKey: watchTestKey(),
+            decision: .approved,
+            consentResult: .explicitUserDecision,
+            responseAtMilliseconds: expiresAt + 1
+        )) {
+            XCTAssertEqual($0 as? WatchAuthError, .expired)
+        }
+    }
 }
