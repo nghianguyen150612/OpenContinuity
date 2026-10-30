@@ -8,15 +8,15 @@ P009A continues P009 on the existing authenticated Watch transport branch. It do
 | --- | --- |
 | `cargo fmt --all -- --check` | PASS |
 | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace --all-targets` | PASS: 122 tests, 0 failures (CLI unit 25, BlueZ mock/integration 22, CLI commands 12, core 62, daemon commands 1). |
+| `cargo test --workspace --all-targets` | PASS: 125 tests, 0 failures (CLI unit 28, BlueZ mock/integration 22, CLI commands 12, core 62, daemon commands 1). |
 | `cargo build --workspace` | PASS |
 | `git diff --check` | PASS |
 
-Coverage includes controlled monotonic request/response deadlines, setup readiness and restart freshness, bounded BlueZ setup, request connection loss, signed expiry during consent, wrong owner/session, cancel, malformed or incomplete transfers, failed signatures, signed rejection, enrollment mismatch/expiry, secure host-key file creation, and explicit fingerprint confirmations. Existing P007 tests pass.
+Coverage includes controlled monotonic request/response deadlines, response completion after a consent decision at the end of its deadline, setup readiness and restart freshness, bounded BlueZ setup, request connection loss, signed expiry during consent, wrong owner/session, cancel, malformed or incomplete transfers, failed signatures, signed rejection, enrollment mismatch/expiry, secure host-key file creation, and explicit fingerprint confirmations. Existing P007 tests pass.
 
 ## Apple validation
 
-Swift and Xcode are unavailable in the Linux work environment. The new host-pin validation tests and existing P008/P009 test suites must run in the `CI / Swift tests and watchOS compile` GitHub Actions job. That job also performs the serialized Rust → Swift → Rust P009 response exchange and unsigned watchOS compilation. Hosted URLs and actual results will be recorded after the branch push.
+Swift and Xcode are unavailable in the Linux work environment. The first hosted run found and failed on a duplicate Swift deadline-test declaration; the duplicate was removed, and the follow-up macOS run will validate Swift tests, the serialized Rust → Swift → Rust P009 response exchange, and unsigned watchOS compilation. Hosted URLs and final results will be recorded after that run completes.
 
 ## Hardware status
 

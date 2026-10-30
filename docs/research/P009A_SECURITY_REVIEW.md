@@ -3,8 +3,8 @@
 ## Security properties implemented
 
 - The P008 host request is created only after BlueZ has registered the dedicated GATT application and advertisement. The 30-second bounded setup phase is unsigned. Failed or expired setup emits no replacement or fallback request.
-- The signed P008 request has an absolute maximum lifetime of 60 seconds. Linux and Watch retain monotonic deadlines for local phases and continue to check the signed wall-clock expiry. No phase timer refreshes P008 freshness.
-- Request delivery, consent, and response transfer have separate bounded deadlines. A response gets its own 15-second transfer interval after consent, clamped to both consent and signed expiry.
+- The signed P008 request has an absolute maximum lifetime of 60 seconds and expires sooner if the test enrollment does. Test enrollment validity is capped at one hour. Linux and Watch retain monotonic deadlines for local phases and continue to check the signed wall-clock expiry. No phase timer refreshes P008 freshness.
+- Request delivery, consent, and response transfer have separate bounded deadlines. The consent timer ends when the first valid response frame is accepted; the response then gets its own 15-second transfer interval, clamped to signed expiry.
 - Linux test host public pins are derived from the host signing key. The Watch imports only public host data and independently confirms its SHA-256 fingerprint. Linux requires explicit command-line confirmation of both host and Watch fingerprints before D-Bus setup.
 - The Watch generates an ephemeral CryptoKit P-256 signing key in memory. Only its SEC1 public key is exported. The Watch enrollment binds its identity to the host enrollment, host identity and Linux UID.
 - Both CLI and Watch reject non-test, inactive/revoked, expired, malformed, unsupported, mismatched and incompletely bound enrollments. The Linux host key must be owned by the effective UID and stored in a regular mode-0600 file; generation refuses overwrite.

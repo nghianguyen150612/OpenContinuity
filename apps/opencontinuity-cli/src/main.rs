@@ -991,7 +991,7 @@ fn run_export_host_pin(args: &[String]) -> ExitCode {
         };
         let now_ms = unix_now_ms()?;
         let expires_at_unix_ms = now_ms
-            .checked_add(3_600_000)
+            .checked_add(gatt::MAX_TEST_ENROLLMENT_LIFETIME_MS)
             .ok_or_else(|| "test host pin expiry overflow".to_owned())?;
         let fingerprint = hex_digest(&Sha256::digest(public_key.as_bytes()));
         Ok(P009HostPinDocument {
@@ -1123,10 +1123,14 @@ fn build_auth_transport_config(
     if pins.schema_version != 2 {
         return Err("unsupported enrollment schema".into());
     }
-    if pins.expires_at_unix_ms <= unix_now_ms()? {
+    let enrollment_now_ms = unix_now_ms()?;
+    if pins.expires_at_unix_ms <= enrollment_now_ms {
         return Err(
             "test enrollment is expired; export and pin a fresh test-only enrollment".into(),
         );
+    }
+    if pins.expires_at_unix_ms - enrollment_now_ms > gatt::MAX_TEST_ENROLLMENT_LIFETIME_MS {
+        return Err("test enrollment exceeds the one-hour validity limit".into());
     }
     if pins.host_enrollment.linux_uid != current_linux_uid()? {
         return Err(

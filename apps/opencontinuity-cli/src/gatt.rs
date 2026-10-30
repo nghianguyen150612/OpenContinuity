@@ -13,6 +13,7 @@ use std::{
 pub const MAX_DURATION_SECONDS: u16 = 300;
 pub const MIN_DURATION_SECONDS: u16 = 1;
 pub const MAX_AUTH_RUNTIME_SECONDS: u16 = 60;
+pub const MAX_TEST_ENROLLMENT_LIFETIME_MS: u64 = 3_600_000;
 pub const BLUEZ_METHOD_TIMEOUT: Duration = Duration::from_secs(2);
 pub const BLUEZ_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -164,6 +165,18 @@ mod linux {
     const MAX_DEVICE_PATH: usize = 128;
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn response_transfer_timeout(now: Instant, signed_deadline: Instant) -> Duration {
+        RESPONSE_TRANSFER_TIMEOUT.min(signed_deadline.saturating_duration_since(now))
+    }
+
+    fn consent_deadline_elapsed(
+        consent_deadline: Option<Instant>,
+        response_started: bool,
+        now: Instant,
+    ) -> bool {
+        !response_started && consent_deadline.is_some_and(|deadline| now >= deadline)
+    }
 
     fn option_u16(
         options: &HashMap<String, OwnedValue>,
@@ -353,6 +366,9 @@ mod linux {
                     "test enrollment is expired; import and pin a fresh test enrollment".into(),
                 );
             }
+            if config.enrollment_expires_at_unix_ms - now_ms > MAX_TEST_ENROLLMENT_LIFETIME_MS {
+                return Err("test enrollment exceeds the one-hour validity limit".into());
+            }
             let host_public = hex_bytes(
                 config
                     .host_signing_key
@@ -414,12 +430,16 @@ mod linux {
                 .map_err(|_| "host signing key state lock poisoned".to_owned())?
                 .take()
                 .ok_or_else(|| "host signing key was already consumed".to_owned())?;
+            let enrollment_remaining_ms = self.enrollment_expires_at_unix_ms - now_ms;
+            let request_lifetime_ms =
+                opencontinuity_core::watch_auth_research::MAX_REQUEST_LIFETIME_MS
+                    .min(enrollment_remaining_ms);
             let signed = build_host_request(
                 &self.host_enrollment,
                 &signing_key,
                 self.watch_enrollment.enrollment_id.clone(),
                 now_ms,
-                opencontinuity_core::watch_auth_research::MAX_REQUEST_LIFETIME_MS,
+                request_lifetime_ms,
             )
             .map_err(|error| {
                 format!("could not create fresh P008 request at readiness: {error}")
@@ -475,14 +495,17 @@ mod linux {
             Ok(())
         }
 
-        fn claim_owner(inner: &mut AuthSessionInner, device: &str) -> Result<(), BluezGattError> {
+        fn claim_owner(
+            inner: &mut AuthSessionInner,
+            device: &str,
+            now: Instant,
+            now_ms: u64,
+        ) -> Result<(), BluezGattError> {
             if inner.retired || inner.decision.is_some() {
                 return Err(BluezGattError::NotPermitted(
                     "research session is no longer available".into(),
                 ));
             }
-            let now = Instant::now();
-            let now_ms = unix_now_ms().map_err(BluezGattError::Failed)?;
             if now >= inner.signed_deadline || now_ms >= inner.expires_at_ms {
                 Self::retire(inner, "signed_request_expired");
                 return Err(BluezGattError::NotPermitted(
@@ -495,10 +518,11 @@ mod linux {
                     "no Watch connected before the bounded client wait ended; start a new research server session".into(),
                 ));
             }
-            if inner
-                .consent_deadline
-                .is_some_and(|deadline| now >= deadline)
-            {
+            if consent_deadline_elapsed(
+                inner.consent_deadline,
+                inner.response_assembler.is_some(),
+                now,
+            ) {
                 Self::retire(inner, "consent_timeout");
                 return Err(BluezGattError::NotPermitted(
                     "waiting-for-consent deadline elapsed; start a new session with a fresh signed request".into(),
@@ -545,13 +569,15 @@ mod linux {
                     "P009 values use explicit chunk indices".into(),
                 ));
             }
+            let now = Instant::now();
+            let now_ms = unix_now_ms().map_err(BluezGattError::Failed)?;
             let mut guard = self.inner.lock().map_err(|_| {
                 BluezGattError::Failed("research session state lock poisoned".into())
             })?;
             let inner = guard.as_mut().ok_or_else(|| BluezGattError::NotPermitted(
                 "research transport is not ready; request signing follows successful BlueZ registration".into()
             ))?;
-            Self::claim_owner(inner, device)?;
+            Self::claim_owner(inner, device, now, now_ms)?;
             let value = match kind {
                 CharacteristicKind::AuthStatus => [
                     vec![
@@ -601,13 +627,25 @@ mod linux {
         ) -> Result<(), BluezGattError> {
             let now = Instant::now();
             let now_ms = unix_now_ms().map_err(BluezGattError::Failed)?;
+            self.write_at(device, kind, value, mtu, now, now_ms)
+        }
+
+        fn write_at(
+            &self,
+            device: &str,
+            kind: CharacteristicKind,
+            value: &[u8],
+            mtu: usize,
+            now: Instant,
+            now_ms: u64,
+        ) -> Result<(), BluezGattError> {
             let mut guard = self.inner.lock().map_err(|_| {
                 BluezGattError::Failed("research session state lock poisoned".into())
             })?;
             let inner = guard.as_mut().ok_or_else(|| BluezGattError::NotPermitted(
                 "research transport is not ready; request signing follows successful BlueZ registration".into()
             ))?;
-            Self::claim_owner(inner, device)?;
+            Self::claim_owner(inner, device, now, now_ms)?;
             match kind {
                 CharacteristicKind::AuthRequestControl => {
                     let (transfer_id, command) =
@@ -664,13 +702,9 @@ mod linux {
                             "research response was already completed".into(),
                         ));
                     }
-                    if inner.response_assembler.is_none() {
-                        let phase_timeout = inner
-                            .consent_deadline
-                            .unwrap_or(now)
-                            .saturating_duration_since(now)
-                            .min(RESPONSE_TRANSFER_TIMEOUT)
-                            .min(inner.signed_deadline.saturating_duration_since(now));
+                    let starts_response = inner.response_assembler.is_none();
+                    if starts_response {
+                        let phase_timeout = response_transfer_timeout(now, inner.signed_deadline);
                         if phase_timeout.is_zero() {
                             Self::retire(inner, "signed_request_expired");
                             return Err(BluezGattError::NotPermitted(
@@ -686,12 +720,20 @@ mod linux {
                             Some(BLE_INACTIVITY_TIMEOUT),
                         ));
                     }
-                    inner
+                    let result = inner
                         .response_assembler
                         .as_mut()
                         .expect("assembler created above")
                         .push(device, AuthDirection::WatchToHost, value, mtu, now)
-                        .map_err(auth_transport_error)
+                        .map_err(auth_transport_error);
+                    if result.is_err() {
+                        Self::retire(inner, "invalid_response_transport");
+                    } else if starts_response {
+                        // Consent has been delivered and the first valid response
+                        // frame owns the separate response-transfer deadline.
+                        inner.consent_deadline = None;
+                    }
+                    result
                 }
                 CharacteristicKind::AuthResponseControl => {
                     let (transfer_id, command) =
@@ -801,10 +843,11 @@ mod linux {
                     Self::retire(inner, "signed_request_expired");
                 } else if inner.owner.is_none() && Instant::now() >= inner.client_deadline {
                     Self::retire(inner, "client_wait_timeout");
-                } else if inner
-                    .consent_deadline
-                    .is_some_and(|deadline| Instant::now() >= deadline)
-                {
+                } else if consent_deadline_elapsed(
+                    inner.consent_deadline,
+                    inner.response_assembler.is_some(),
+                    Instant::now(),
+                ) {
                     Self::retire(inner, "consent_timeout");
                 }
             }
@@ -838,10 +881,11 @@ mod linux {
                 Some("signed_request_expired")
             } else if inner.owner.is_none() && now >= inner.client_deadline {
                 Some("client_wait_timeout")
-            } else if inner
-                .consent_deadline
-                .is_some_and(|deadline| now >= deadline)
-            {
+            } else if consent_deadline_elapsed(
+                inner.consent_deadline,
+                inner.response_assembler.is_some(),
+                now,
+            ) {
                 Some("consent_timeout")
             } else {
                 None
@@ -2587,6 +2631,35 @@ mod linux {
             ));
         }
 
+        #[test]
+        fn response_transfer_gets_its_own_window_after_consent_and_stays_inside_signed_expiry() {
+            let request_complete = Instant::now();
+            let consent_deadline = request_complete + WAITING_FOR_CONSENT_TIMEOUT;
+            let response_started = consent_deadline - Duration::from_millis(1);
+            let signed_deadline = response_started + Duration::from_secs(40);
+
+            assert!(consent_deadline_elapsed(
+                Some(consent_deadline),
+                false,
+                consent_deadline
+            ));
+            assert!(!consent_deadline_elapsed(
+                Some(consent_deadline),
+                true,
+                consent_deadline + Duration::from_secs(1)
+            ));
+            assert_eq!(
+                response_transfer_timeout(response_started, signed_deadline),
+                RESPONSE_TRANSFER_TIMEOUT
+            );
+
+            let response_started_near_signed_expiry = signed_deadline - Duration::from_secs(3);
+            assert_eq!(
+                response_transfer_timeout(response_started_near_signed_expiry, signed_deadline),
+                Duration::from_secs(3)
+            );
+        }
+
         fn test_key(scalar: u8) -> SigningKey {
             SigningKey::from_bytes(&FieldBytes::from([scalar; 32])).unwrap()
         }
@@ -2749,6 +2822,54 @@ mod linux {
         }
 
         #[test]
+        fn signed_request_expiry_is_clamped_to_the_test_enrollment_expiry() {
+            let host_key = test_key(31);
+            let watch_key = test_key(32);
+            let host = HostEnrollment {
+                enrollment_id: "host-p009a-short-pin".into(),
+                host_identity: "linux-p009a-short-pin".into(),
+                linux_uid: 1000,
+                public_key_sec1_hex: test_key_hex(&host_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let watch = WatchEnrollment {
+                enrollment_id: "watch-p009a-short-pin".into(),
+                watch_identity: "watch-p009a-short-pin".into(),
+                bound_host_enrollment_id: host.enrollment_id.clone(),
+                bound_host_identity: host.host_identity.clone(),
+                bound_linux_uid: host.linux_uid,
+                public_key_sec1_hex: test_key_hex(&watch_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let initial_wall = unix_now_ms().unwrap();
+            let enrollment_expiry = initial_wall + 5_000;
+            let state = AuthTransportState::new(AuthTransportConfig {
+                host_signing_key: host_key,
+                host_enrollment: host,
+                watch_enrollment: watch,
+                enrollment_expires_at_unix_ms: enrollment_expiry,
+            })
+            .unwrap();
+            let ready_at = Instant::now();
+            let ready_wall = initial_wall + 1_000;
+            state.activate_at(ready_at, ready_wall).unwrap();
+
+            let guard = state.inner.lock().unwrap();
+            let session = guard.as_ref().unwrap();
+            let request =
+                HostAuthRequest::parse_canonical(session.envelope.as_ref().unwrap().canonical())
+                    .unwrap();
+            assert_eq!(request.expires_at_ms, enrollment_expiry);
+            assert_eq!(session.signed_deadline, ready_at + Duration::from_secs(4));
+        }
+
+        #[test]
         fn expired_or_mismatched_test_enrollment_fails_before_request_initialization() {
             let host_key = test_key(21);
             let watch_key = test_key(22);
@@ -2784,6 +2905,14 @@ mod linux {
             .unwrap();
             assert!(expired.activate_at(Instant::now(), now_ms + 1).is_err());
             assert!(expired.inner.lock().unwrap().is_none());
+
+            let overlong = AuthTransportState::new(AuthTransportConfig {
+                host_signing_key: host_key.clone(),
+                host_enrollment: host.clone(),
+                watch_enrollment: watch.clone(),
+                enrollment_expires_at_unix_ms: now_ms + MAX_TEST_ENROLLMENT_LIFETIME_MS + 1,
+            });
+            assert!(overlong.is_err());
 
             let mismatched = AuthTransportState::new(AuthTransportConfig {
                 host_signing_key: test_key(23),
@@ -3081,6 +3210,87 @@ mod linux {
                     )
                     .is_err()
             );
+        }
+
+        #[test]
+        fn response_started_before_consent_deadline_finishes_in_its_own_transfer_window() {
+            let (state, request, verified, _, watch, watch_key) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            deliver_request(&state, &request, owner, id);
+
+            let wall_now = unix_now_ms().unwrap();
+            let response_started_at = Instant::now() + Duration::from_secs(1);
+            let response_started_wall_ms = wall_now + 1_000;
+            let consent_deadline = response_started_at + Duration::from_millis(20);
+            {
+                let mut guard = state.inner.lock().unwrap();
+                guard.as_mut().unwrap().consent_deadline = Some(consent_deadline);
+            }
+
+            let signed = create_watch_response(
+                verified,
+                &watch,
+                &watch_key,
+                ManualDecision::Reject,
+                ConsentResult::ExplicitUserDecision,
+                response_started_wall_ms,
+            )
+            .unwrap();
+            let response = SignedEnvelope::new(
+                AuthDirection::WatchToHost,
+                &signed.response.canonical_bytes().unwrap(),
+                &signed.signature_raw,
+            )
+            .unwrap();
+            let response_frames =
+                encode_auth_frames(AuthDirection::WatchToHost, id, &response, 23).unwrap();
+            state
+                .write_at(
+                    owner,
+                    CharacteristicKind::AuthResponseData,
+                    &response_frames[0],
+                    23,
+                    response_started_at,
+                    response_started_wall_ms,
+                )
+                .unwrap();
+            assert!(
+                state
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .consent_deadline
+                    .is_none()
+            );
+
+            let after_consent_deadline = consent_deadline + Duration::from_millis(1);
+            let after_consent_wall_ms = response_started_wall_ms + 21;
+            for frame in response_frames.iter().skip(1) {
+                state
+                    .write_at(
+                        owner,
+                        CharacteristicKind::AuthResponseData,
+                        frame,
+                        23,
+                        after_consent_deadline,
+                        after_consent_wall_ms,
+                    )
+                    .unwrap();
+            }
+            state
+                .write_at(
+                    owner,
+                    CharacteristicKind::AuthResponseControl,
+                    &command(id, RequestCommand::Complete),
+                    23,
+                    after_consent_deadline,
+                    after_consent_wall_ms,
+                )
+                .unwrap();
+            assert_eq!(state.decision(), Some("rejected"));
         }
 
         #[test]

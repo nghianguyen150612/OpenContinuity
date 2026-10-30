@@ -17,6 +17,7 @@ struct P009ResearchCredentials {
     let watchEnrollment: WatchEnrollment
     let signingKey: P256.Signing.PrivateKey
     let expiresAtUnixMilliseconds: UInt64
+    let expiresAtMonotonicMilliseconds: UInt64
 }
 
 struct P009ConsentPresentation: Identifiable {
@@ -74,6 +75,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     private var importedHostEnrollment: HostEnrollment?
     private var importedHostRecord: P009HostEnrollmentRecord?
     private var importedHostExpiry: UInt64?
+    private var importedHostExpiryMonotonicMilliseconds: UInt64?
     private var watchEnrollmentForExport: WatchEnrollment?
     private var watchRecordForExport: P009WatchEnrollmentRecord?
     private var authTransferID: Data?
@@ -138,9 +140,11 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             let now = currentMilliseconds
             let host = try document.validate(nowMilliseconds: now)
             let fingerprint = p009Fingerprint(host.publicKeySEC1)
+            let expiresAtMonotonic = currentMonotonicMilliseconds + (document.expiresAtUnixMs - now)
             importedHostEnrollment = host
             importedHostRecord = document.hostEnrollment
             importedHostExpiry = document.expiresAtUnixMs
+            importedHostExpiryMonotonicMilliseconds = expiresAtMonotonic
             researchHostFingerprint = fingerprint
             researchHostIdentity = host.hostIdentity
             researchLinuxUID = host.linuxUID
@@ -210,7 +214,9 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
               let host = importedHostEnrollment,
               let hostRecord = importedHostRecord,
               let expiresAt = importedHostExpiry,
-              expiresAt > currentMilliseconds else {
+              let monotonicExpiry = importedHostExpiryMonotonicMilliseconds,
+              expiresAt > currentMilliseconds,
+              currentMonotonicMilliseconds < monotonicExpiry else {
             researchEnrollmentReady = false
             return
         }
@@ -277,13 +283,16 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
               let watch = watchEnrollmentForExport,
               let signingKey = temporaryResearchSigningKey,
               let expiresAt = importedHostExpiry,
+              let monotonicExpiry = importedHostExpiryMonotonicMilliseconds,
               expiresAt > currentMilliseconds,
+              currentMonotonicMilliseconds < monotonicExpiry,
               signingKey.publicKey.x963Representation == watch.publicKeySEC1 else { return nil }
         return P009ResearchCredentials(
             hostEnrollment: host,
             watchEnrollment: watch,
             signingKey: signingKey,
-            expiresAtUnixMilliseconds: expiresAt
+            expiresAtUnixMilliseconds: expiresAt,
+            expiresAtMonotonicMilliseconds: monotonicExpiry
         )
     }
 
@@ -296,6 +305,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         importedHostEnrollment = nil
         importedHostRecord = nil
         importedHostExpiry = nil
+        importedHostExpiryMonotonicMilliseconds = nil
         watchEnrollmentForExport = nil
         watchRecordForExport = nil
         researchHostPinImported = false
@@ -648,8 +658,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     ) {
         guard consentPresentation?.id == presentationID,
               state == .awaitingResearchConsent else { return }
-        guard let consentDeadline = authConsentDeadline,
-              consentDeadline.isActive(atMilliseconds: currentMonotonicMilliseconds),
+        guard authConsentDeadline?.isActive(atMilliseconds: currentMonotonicMilliseconds) == true,
               let signedDeadline = authSignedExpiryMonotonicMilliseconds,
               currentMonotonicMilliseconds < signedDeadline,
               currentMilliseconds < (authVerifiedRequest?.request.expiresAtMilliseconds ?? 0) else {
@@ -658,6 +667,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         }
         watchdog?.cancel()
         consentPresentation = nil
+        authConsentDeadline = nil
         switch result {
         case .failure:
             do {
@@ -677,7 +687,8 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                       currentMonotonicMilliseconds < monotonicExpiry,
                       signed.response.responseAtMilliseconds < expiresAt,
                       signed.response.responseAtMilliseconds <= now,
-                      credentials.expiresAtUnixMilliseconds > now else {
+                      credentials.expiresAtUnixMilliseconds > now,
+                      currentMonotonicMilliseconds < credentials.expiresAtMonotonicMilliseconds else {
                     throw WatchAuthError.expired
                 }
                 let envelope = try WatchSignedEnvelope(
@@ -690,7 +701,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                 authResponseDeadline = WatchAuthMonotonicDeadline(
                     startedAtMilliseconds: currentMonotonicMilliseconds,
                     timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
-                    hardDeadlineMilliseconds: min(consentDeadline.deadlineMilliseconds, signedDeadline)
+                    hardDeadlineMilliseconds: signedDeadline
                 )
                 authResponseDecision = signed.response.decision == .approved ? "approved" : "rejected"
                 state = .sendingAuthResponse

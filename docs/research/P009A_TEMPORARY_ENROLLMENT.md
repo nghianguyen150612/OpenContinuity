@@ -20,7 +20,7 @@ Use the actual effective Linux UID in `--linux-uid`. The generator creates a new
 3. The app creates a fresh Watch enrollment identity bound to the pinned host enrollment, host identity and Linux UID. Its public key and enrollment expire with the imported host pin, no later than one hour after export.
 4. Share the displayed public enrollment JSON with the Linux operator. Confirm the Watch public-key fingerprint through the independent channel. Do not approve based only on the shared file or BLE discovery.
 
-The Watch public enrollment has schema version 2 and contains only public keys and binding metadata. There is no private-key field. The app requires a second explicit confirmation that the Linux operator compared and pinned the Watch fingerprint before enabling **Start Authenticated Research**.
+The Watch public enrollment has schema version 2 and contains only public keys and binding metadata. There is no private-key field. Linux rejects enrollments with more than one hour remaining, and the signed P008 request expires at the earlier of its normal 60-second limit or the enrollment expiry. The app requires a second explicit confirmation that the Linux operator compared and pinned the Watch fingerprint before enabling **Start Authenticated Research**.
 
 ## Linux operator: verify both pins and start
 

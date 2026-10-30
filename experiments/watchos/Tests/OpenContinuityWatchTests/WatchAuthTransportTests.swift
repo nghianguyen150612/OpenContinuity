@@ -81,38 +81,12 @@ final class WatchAuthTransportTests: XCTestCase {
         let lateResponse = WatchAuthMonotonicDeadline(
             startedAtMilliseconds: 25_000,
             timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
-            hardDeadlineMilliseconds: min(consent.deadlineMilliseconds, 61_000)
-        )
-        XCTAssertEqual(lateResponse.deadlineMilliseconds, 26_000)
-        XCTAssertEqual(lateResponse.remainingMilliseconds(atMilliseconds: 25_999), 1)
-        XCTAssertFalse(lateResponse.isActive(atMilliseconds: 26_000))
-
-        let signedExpiryFirst = WatchAuthMonotonicDeadline(
-            startedAtMilliseconds: 1_000,
-            timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
-            hardDeadlineMilliseconds: 5_000
-        )
-        XCTAssertEqual(signedExpiryFirst.deadlineMilliseconds, 5_000)
-    }
-
-    func testConsentAndResponseDeadlinesStartPerPhaseAndNeverExtendSignedExpiry() {
-        let consent = WatchAuthMonotonicDeadline(
-            startedAtMilliseconds: 1_000,
-            timeoutMilliseconds: WatchAuthTransport.waitingForConsentTimeoutMilliseconds,
             hardDeadlineMilliseconds: 61_000
         )
-        XCTAssertEqual(consent.deadlineMilliseconds, 26_000)
-        XCTAssertTrue(consent.isActive(atMilliseconds: 25_999))
-        XCTAssertFalse(consent.isActive(atMilliseconds: 26_000))
-
-        let lateResponse = WatchAuthMonotonicDeadline(
-            startedAtMilliseconds: 25_000,
-            timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
-            hardDeadlineMilliseconds: min(consent.deadlineMilliseconds, 61_000)
-        )
-        XCTAssertEqual(lateResponse.deadlineMilliseconds, 26_000)
-        XCTAssertEqual(lateResponse.remainingMilliseconds(atMilliseconds: 25_999), 1)
-        XCTAssertFalse(lateResponse.isActive(atMilliseconds: 26_000))
+        XCTAssertEqual(lateResponse.deadlineMilliseconds, 40_000)
+        XCTAssertEqual(lateResponse.remainingMilliseconds(atMilliseconds: 25_999), 14_001)
+        XCTAssertTrue(lateResponse.isActive(atMilliseconds: consent.deadlineMilliseconds))
+        XCTAssertFalse(lateResponse.isActive(atMilliseconds: 40_000))
 
         let signedExpiryFirst = WatchAuthMonotonicDeadline(
             startedAtMilliseconds: 1_000,

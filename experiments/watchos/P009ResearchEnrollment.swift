@@ -1,6 +1,8 @@
 import CryptoKit
 import Foundation
 
+public let p009MaximumTestEnrollmentLifetimeMilliseconds: UInt64 = 3_600_000
+
 public struct P009HostPinDocument: Decodable {
     public let schemaVersion: UInt8
     public let expiresAtUnixMs: UInt64
@@ -33,7 +35,7 @@ public struct P009HostPinDocument: Decodable {
             throw P009EnrollmentError.incompleteOrUnsupported
         }
         guard expiresAtUnixMs > nowMilliseconds,
-              expiresAtUnixMs - nowMilliseconds <= 3_600_000 else {
+              expiresAtUnixMs - nowMilliseconds <= p009MaximumTestEnrollmentLifetimeMilliseconds else {
             throw P009EnrollmentError.expired
         }
         let host = try hostEnrollment.protocolValue()
