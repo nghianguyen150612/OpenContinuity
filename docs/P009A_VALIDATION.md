@@ -16,7 +16,11 @@ Coverage includes controlled monotonic request/response deadlines, response comp
 
 ## Apple validation
 
-Swift and Xcode are unavailable in the Linux work environment. The first hosted run found a duplicate Swift deadline-test declaration, which was removed. The next hosted run passed Swift tests and the serialized Rust → Swift → Rust P009 response exchange, then found a missing protocol-module import in the new Watch screen; that import is fixed in the current source. The current SHA still requires a complete macOS CI pass for Swift tests, interop and unsigned watchOS compilation.
+Swift and Xcode are unavailable in the Linux work environment. The current-head macOS GitHub Actions run passed Swift codec/lifecycle tests, the serialized Rust → Swift → Rust P009 exchange (including CryptoKit verification in both directions), and unsigned watchOS application compilation:
+
+- [Run 40990995735](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/40990995735) on `9b335aa55ca1c2ae7d3c7bf1d6894df2ce855fdc`: PASS.
+
+Earlier hosted runs exposed a duplicate Swift test declaration, a missing protocol-module import, and watchOS-unavailable file import/text selection APIs. Those issues were fixed before this passing run.
 
 ## Hardware status
 
