@@ -423,6 +423,19 @@ impl TransferAssembler {
         self.byte_complete
     }
 
+    pub fn validate_live(
+        &self,
+        owner: &str,
+        transfer_id: [u8; 8],
+        now: Instant,
+    ) -> Result<(), TransportError> {
+        self.check_owner(owner)?;
+        if transfer_id != self.transfer_id {
+            return Err(TransportError::SessionMismatch);
+        }
+        self.check_live(now)
+    }
+
     pub fn owner(&self) -> &str {
         &self.owner
     }
@@ -917,6 +930,28 @@ mod tests {
             now += Duration::from_millis(1);
         }
         assert_eq!(assembler.complete(OWNER, TRANSFER_ID, now).unwrap(), signed);
+    }
+
+    #[test]
+    fn transfer_assembler_deadlines_can_be_polled_while_no_frame_arrives() {
+        let start = Instant::now();
+        let assembler = TransferAssembler::new_with_timeout(
+            TRANSFER_ID,
+            Direction::WatchToHost,
+            OWNER,
+            start,
+            RESPONSE_TRANSFER_TIMEOUT,
+            Some(BLE_INACTIVITY_TIMEOUT),
+        );
+        assert_eq!(assembler.validate_live(OWNER, TRANSFER_ID, start), Ok(()));
+        assert_eq!(
+            assembler.validate_live(OWNER, TRANSFER_ID, start + BLE_INACTIVITY_TIMEOUT),
+            Err(TransportError::InactivityExpired)
+        );
+        assert_eq!(
+            assembler.validate_live(OWNER, TRANSFER_ID, start + RESPONSE_TRANSFER_TIMEOUT),
+            Err(TransportError::TransferExpired)
+        );
     }
 
     #[test]

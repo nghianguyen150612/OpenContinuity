@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import OpenContinuityProtocol
 
 struct AuthenticatedResearchView: View {
     @ObservedObject var bluetooth: WatchBluetoothManager

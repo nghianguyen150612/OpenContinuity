@@ -178,6 +178,35 @@ mod linux {
         !response_started && consent_deadline.is_some_and(|deadline| now >= deadline)
     }
 
+    fn transfer_deadline_reason(inner: &AuthSessionInner, now: Instant) -> Option<&'static str> {
+        let owner = inner.owner.as_deref()?;
+        if !inner.request_complete {
+            if let Some(mailbox) = &inner.request_mailbox {
+                match mailbox.validate_live(owner, inner.transfer_id, now) {
+                    Err(AuthTransportError::TransferExpired) => {
+                        return Some("request_transfer_timeout");
+                    }
+                    Err(AuthTransportError::InactivityExpired) => {
+                        return Some("ble_inactivity_timeout");
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(assembler) = &inner.response_assembler {
+            match assembler.validate_live(owner, inner.transfer_id, now) {
+                Err(AuthTransportError::TransferExpired) => {
+                    return Some("response_transfer_timeout");
+                }
+                Err(AuthTransportError::InactivityExpired) => {
+                    return Some("ble_inactivity_timeout");
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn option_u16(
         options: &HashMap<String, OwnedValue>,
         key: &str,
@@ -540,15 +569,13 @@ mod linux {
             let envelope = inner.envelope.as_ref().ok_or_else(|| {
                 BluezGattError::NotPermitted("research request was invalidated".into())
             })?;
-            let started_at = Instant::now();
             let mailbox = RequestChunkMailbox::new_with_timeout(
                 inner.transfer_id,
                 device,
                 envelope,
                 23,
-                started_at,
-                REQUEST_TRANSFER_TIMEOUT
-                    .min(inner.signed_deadline.saturating_duration_since(started_at)),
+                now,
+                REQUEST_TRANSFER_TIMEOUT.min(inner.signed_deadline.saturating_duration_since(now)),
                 Some(BLE_INACTIVITY_TIMEOUT),
             )
             .map_err(auth_transport_error)?;
@@ -843,6 +870,8 @@ mod linux {
                     Self::retire(inner, "signed_request_expired");
                 } else if inner.owner.is_none() && Instant::now() >= inner.client_deadline {
                     Self::retire(inner, "client_wait_timeout");
+                } else if let Some(reason) = transfer_deadline_reason(inner, Instant::now()) {
+                    Self::retire(inner, reason);
                 } else if consent_deadline_elapsed(
                     inner.consent_deadline,
                     inner.response_assembler.is_some(),
@@ -869,18 +898,27 @@ mod linux {
         }
 
         fn deadline_shutdown_reason(&self) -> Option<&'static str> {
+            self.deadline_shutdown_reason_at(Instant::now(), unix_now_ms().ok())
+        }
+
+        fn deadline_shutdown_reason_at(
+            &self,
+            now: Instant,
+            now_ms: Option<u64>,
+        ) -> Option<&'static str> {
             let mut guard = self.inner.lock().ok()?;
             let inner = guard.as_mut()?;
             if let Some(reason) = inner.terminal_reason {
                 return Some(reason);
             }
-            let now = Instant::now();
             let reason = if now >= inner.signed_deadline
-                || unix_now_ms().is_ok_and(|now_ms| now_ms >= inner.expires_at_ms)
+                || now_ms.is_some_and(|now_ms| now_ms >= inner.expires_at_ms)
             {
                 Some("signed_request_expired")
             } else if inner.owner.is_none() && now >= inner.client_deadline {
                 Some("client_wait_timeout")
+            } else if let Some(reason) = transfer_deadline_reason(inner, now) {
+                Some(reason)
             } else if consent_deadline_elapsed(
                 inner.consent_deadline,
                 inner.response_assembler.is_some(),
@@ -3182,6 +3220,23 @@ mod linux {
         }
 
         #[test]
+        fn request_inactivity_timeout_is_polled_without_another_ble_callback() {
+            let (state, _, _, _, _, _) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let _ = status_transfer_id(&state, owner);
+            let claimed_at = Instant::now();
+            let claimed_wall_ms = unix_now_ms().unwrap();
+
+            assert_eq!(
+                state.deadline_shutdown_reason_at(
+                    claimed_at + BLE_INACTIVITY_TIMEOUT + Duration::from_millis(1),
+                    Some(claimed_wall_ms + 8_001),
+                ),
+                Some("ble_inactivity_timeout")
+            );
+        }
+
+        #[test]
         fn signed_request_expiring_during_consent_retires_before_response_transfer() {
             let (state, request, _, _, _, _) = auth_state();
             let owner = "/org/bluez/hci0/dev_01";
@@ -3291,6 +3346,50 @@ mod linux {
                 )
                 .unwrap();
             assert_eq!(state.decision(), Some("rejected"));
+        }
+
+        #[test]
+        fn response_transfer_timeout_is_polled_without_another_ble_callback() {
+            let (state, request, verified, _, watch, watch_key) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            deliver_request(&state, &request, owner, id);
+
+            let now_ms = unix_now_ms().unwrap();
+            let signed = create_watch_response(
+                verified,
+                &watch,
+                &watch_key,
+                ManualDecision::Reject,
+                ConsentResult::ExplicitUserDecision,
+                now_ms,
+            )
+            .unwrap();
+            let response = SignedEnvelope::new(
+                AuthDirection::WatchToHost,
+                &signed.response.canonical_bytes().unwrap(),
+                &signed.signature_raw,
+            )
+            .unwrap();
+            let first_frame = encode_auth_frames(AuthDirection::WatchToHost, id, &response, 23)
+                .unwrap()
+                .remove(0);
+            state
+                .write(
+                    owner,
+                    CharacteristicKind::AuthResponseData,
+                    &first_frame,
+                    23,
+                )
+                .unwrap();
+
+            assert_eq!(
+                state.deadline_shutdown_reason_at(
+                    Instant::now() + RESPONSE_TRANSFER_TIMEOUT + Duration::from_millis(1),
+                    Some(now_ms + 15_001),
+                ),
+                Some("response_transfer_timeout")
+            );
         }
 
         #[test]
