@@ -2963,17 +2963,23 @@ mod linux {
                 host_signing_key: host_key.clone(),
                 host_enrollment: host.clone(),
                 watch_enrollment: watch.clone(),
-                enrollment_expires_at_unix_ms: now_ms + 1,
+                // Use the injected activation time below rather than a 1 ms wall-clock race.
+                enrollment_expires_at_unix_ms: now_ms + 60_000,
             })
             .unwrap();
-            assert!(expired.activate_at(Instant::now(), now_ms + 1).is_err());
+            assert!(
+                expired
+                    .activate_at(Instant::now(), now_ms + 60_000)
+                    .is_err()
+            );
             assert!(expired.inner.lock().unwrap().is_none());
 
             let overlong = AuthTransportState::new(AuthTransportConfig {
                 host_signing_key: host_key.clone(),
                 host_enrollment: host.clone(),
                 watch_enrollment: watch.clone(),
-                enrollment_expires_at_unix_ms: now_ms + MAX_TEST_ENROLLMENT_LIFETIME_MS + 1,
+                // Remains overlong regardless of scheduler delay between clock reads.
+                enrollment_expires_at_unix_ms: u64::MAX,
             });
             assert!(overlong.is_err());
 
