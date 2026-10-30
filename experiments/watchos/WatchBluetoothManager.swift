@@ -135,6 +135,11 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             researchSetupMessage = "End the current authenticated research session before importing a new host pin."
             return
         }
+        guard data.count <= 4_096 else {
+            researchSetupMessage = "Host public pin exceeds the 4 KiB import limit. Nothing was activated."
+            clearImportedHostPin()
+            return
+        }
         do {
             let document = try JSONDecoder().decode(P009HostPinDocument.self, from: data)
             let now = currentMilliseconds

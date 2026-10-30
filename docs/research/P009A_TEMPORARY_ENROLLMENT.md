@@ -11,12 +11,12 @@ opencontinuity research watch-auth-gatt generate-host-key --host-key-file /secur
 opencontinuity research watch-auth-gatt export-host-pin --host-enrollment-id lab-host-01 --host-identity linux-lab-01 --linux-uid 1000 --host-key-file /secure/path/p009a-host-key --experimental --json
 ```
 
-Use the actual effective Linux UID in `--linux-uid`. The generator creates a new random P-256 key in a new mode-0600 file and refuses to overwrite an existing path. It prints only the public fingerprint. The export emits the public key, host identity, UID, active `test_only` enrollment fields, fingerprint and a one-hour expiry. Transfer this public JSON to the Watch operator. Independently communicate the host SHA-256 fingerprint through a manually verified channel, such as a supervised in-person comparison or a separately authenticated call.
+Use the actual effective Linux UID in `--linux-uid`. The generator creates a new random P-256 key in a new mode-0600 file and refuses to overwrite an existing path. It prints only the public fingerprint. The export emits the public key, host identity, UID, active `test_only` enrollment fields, fingerprint and a one-hour expiry. Transfer this public JSON to the Watch operator for entry in the Watch pin field. Independently communicate the host SHA-256 fingerprint through a manually verified channel, such as a supervised in-person comparison or a separately authenticated call. The JSON transfer itself does not establish identity.
 
 ## Watch operator: create the ephemeral Watch pin
 
 1. Open **Authenticated Research** in the Watch app and choose **Create ephemeral Watch key**. CryptoKit creates a new P-256 signing key. The private key stays in app memory and is never included in export data.
-2. Import the Linux host public-pin JSON. Check the displayed host identity, Linux UID, and fingerprint against the independently communicated values. Select the host-fingerprint confirmation only after they match.
+2. Paste or enter the Linux host public-pin JSON in the Watch pin field. Check the displayed host identity, Linux UID, and fingerprint against the independently communicated values. Select the host-fingerprint confirmation only after they match.
 3. The app creates a fresh Watch enrollment identity bound to the pinned host enrollment, host identity and Linux UID. Its public key and enrollment expire with the imported host pin, no later than one hour after export.
 4. Share the displayed public enrollment JSON with the Linux operator. Confirm the Watch public-key fingerprint through the independent channel. Do not approve based only on the shared file or BLE discovery.
 

@@ -1,10 +1,9 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import OpenContinuityProtocol
 
 struct AuthenticatedResearchView: View {
     @ObservedObject var bluetooth: WatchBluetoothManager
-    @State private var selectingHostPin = false
+    @State private var hostPinJSON = ""
     @State private var hostFingerprintConfirmed = false
     @State private var watchFingerprintConfirmed = false
 
@@ -29,8 +28,19 @@ struct AuthenticatedResearchView: View {
                      : "No Watch research key is active.")
                     .font(.caption2)
 
-                Button("Import Linux host public pin") { selectingHostPin = true }
+                TextField("Paste Linux host public pin JSON", text: $hostPinJSON, axis: .vertical)
+                    .font(.system(.caption2, design: .monospaced))
+                    .lineLimit(3...8)
                     .disabled(!bluetooth.researchKeyCreated || !bluetooth.canEditResearchSetup)
+                Button("Import Linux host public pin") {
+                    bluetooth.importResearchHostPin(Data(hostPinJSON.utf8))
+                    if bluetooth.researchHostPinImported { hostPinJSON = "" }
+                    hostFingerprintConfirmed = false
+                    watchFingerprintConfirmed = false
+                }
+                .disabled(hostPinJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                          hostPinJSON.utf8.count > 4_096 ||
+                          !bluetooth.researchKeyCreated || !bluetooth.canEditResearchSetup)
 
                 if bluetooth.researchHostPinImported {
                     Group {
@@ -39,7 +49,7 @@ struct AuthenticatedResearchView: View {
                         Text("Host SHA-256")
                         Text(p009DisplayFingerprint(bluetooth.researchHostFingerprint))
                             .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                         Toggle("I compared the host fingerprint over a separate channel", isOn: $hostFingerprintConfirmed)
                             .font(.caption2)
                     }
@@ -56,7 +66,7 @@ struct AuthenticatedResearchView: View {
                         .font(.caption2)
                     Text(p009DisplayFingerprint(bluetooth.researchWatchFingerprint))
                         .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                     ShareLink(item: bluetooth.researchEnrollmentExport) {
                         Label("Share public enrollment with Linux operator", systemImage: "square.and.arrow.up")
                     }
@@ -107,25 +117,6 @@ struct AuthenticatedResearchView: View {
             .padding()
         }
         .navigationTitle("Research")
-        .fileImporter(
-            isPresented: $selectingHostPin,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            do {
-                guard let url = try result.get().first else { return }
-                let hasScopedAccess = url.startAccessingSecurityScopedResource()
-                defer {
-                    if hasScopedAccess { url.stopAccessingSecurityScopedResource() }
-                }
-                let data = try Data(contentsOf: url)
-                bluetooth.importResearchHostPin(data)
-                hostFingerprintConfirmed = false
-                watchFingerprintConfirmed = false
-            } catch {
-                bluetooth.reportResearchSetupError("Could not import host public pin: \(error.localizedDescription)")
-            }
-        }
         .onChange(of: bluetooth.researchSetupGeneration) { _, _ in
             hostFingerprintConfirmed = false
             watchFingerprintConfirmed = false
