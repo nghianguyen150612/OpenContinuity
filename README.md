@@ -49,3 +49,7 @@ OpenContinuity is MIT-licensed, as established by the repository's original [LIC
 ### P008 provisional signed approval research
 
 P008 adds Rust P-256 request/response verification, CryptoKit-compatible Swift transcripts, test-only independent enrollment pins and a foreground LocalAuthentication consent component that is separate from GATT v1. The component does not unlock Linux. Hosted Apple compilation and physical Watch/BlueZ behavior remain separate gates. See the [protocol](docs/research/P008_AUTH_PROTOCOL.md), [enrollment boundaries](docs/research/P008_ENROLLMENT_TRUST.md), [consent research](docs/research/P008_WATCH_CONSENT.md), [security review](docs/research/P008_SECURITY_REVIEW.md) and [validation](docs/P008_VALIDATION.md). The missing original Foundation/Settings roadmap, production adapter and Qt6/QML framework remain unresolved.
+
+### P007B physical BLE qualification infrastructure
+
+P007B provides a [sanitized read-only BlueZ preflight](scripts/qualify-p007b-host.py), [signed Watch installation guide](docs/research/P007B_APPLE_SIGNED_INSTALL.md), [physical BLE runbook](docs/research/P007B_REAL_BLE_RUNBOOK.md), and [validation](docs/P007B_VALIDATION.md). The Watch synthetic transport UI offers a disabled-by-default, bounded (64 event), allowlisted metadata trace, erased when disabled. The P007B software infrastructure has been merged; actual controller RF, Watch SE 2 long reads and physical exchanges remain **NOT RUN**. This is not Apple Watch identity verification or Linux authorization.

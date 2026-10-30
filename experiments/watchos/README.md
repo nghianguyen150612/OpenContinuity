@@ -38,3 +38,7 @@ A successful digest proves only that the experimental server returned a hash of 
 `CI / Swift tests and watchOS compile` runs independently of Linux Rust checks on `macos-15`. It inventories Swift/Xcode/SDKs, runs the CryptoKit protocol, transport and enrollment test suite, generates the project and compiles the Watch application without signing. Physical radio, simulator runtime and Watch installation are separate gates.
 
 Start Scan is disabled and rejected in the manager while any connection is owned. Disconnect retains that peripheral until a terminal callback; suspension performs the same cleanup even after Completed/Cancelled. `GattLifecycle` is the tested pure ownership gate. Operations are serialized and characteristic identity is checked. Connection-specific delegate generations and central replacement reject old connection callbacks.
+
+## P007B synthetic diagnostics and physical BLE validation
+
+The synthetic GATT screen offers bounded, metadata-only diagnostics: disabled by default, at most 64 events, erased on opt-out, never recording payloads, keys or device identifiers. Events include challenge/result lengths, frame acknowledgements and digest verdict. The trace shows `authorization: never_evaluated`. See [signed device installation](../../docs/research/P007B_APPLE_SIGNED_INSTALL.md), [physical BLE runbook](../../docs/research/P007B_REAL_BLE_RUNBOOK.md), and [validation](../../docs/P007B_VALIDATION.md). Real Watch SE 2 ↔ BlueZ trials remain NOT RUN.

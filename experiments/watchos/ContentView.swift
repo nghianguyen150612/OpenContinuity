@@ -42,6 +42,12 @@ struct ContentView: View {
                             .tint(.red)
                     }
 
+                    Toggle("Synthetic BLE Diagnostics", isOn: Binding(get: { bluetooth.diagnosticsEnabled }, set: { bluetooth.setDiagnosticsEnabled($0) }))
+                    if bluetooth.diagnosticsEnabled {
+                        ForEach(Array(bluetooth.diagnosticLines.enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.caption2)
+                        }
+                    }
                     Text(bluetooth.detail).font(.caption2).fixedSize(horizontal: false, vertical: true)
                     Text("Neither synthetic transport nor a signed research response authorizes or unlocks Linux.")
                         .font(.caption2).foregroundStyle(.secondary)

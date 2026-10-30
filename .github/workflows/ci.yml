@@ -18,6 +18,8 @@ jobs:
           toolchain: 1.85.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Sanitized P007B host preflight tests
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Clippy

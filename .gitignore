@@ -7,3 +7,5 @@
 
 /experiments/watchos/.build/
 /experiments/watchos/OpenContinuityWatch.xcodeproj/
+
+__pycache__/
