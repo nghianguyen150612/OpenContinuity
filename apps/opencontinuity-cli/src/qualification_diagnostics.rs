@@ -89,6 +89,7 @@ mod tests {
         assert_eq!(vector["source"], "simulated");
         let elapsed = vector["finish_ms"].as_u64().unwrap() - vector["start_ms"].as_u64().unwrap();
         let mut trace = Trace::new(true);
+        trace.source = "simulated";
         trace.record_at(
             Stage::Cleanup,
             elapsed,
@@ -99,6 +100,7 @@ mod tests {
         assert_eq!(json["samples"][0]["elapsedMs"], vector["elapsed_ms"]);
         assert_eq!(json["samples"][0]["timestampUnixMs"], vector["wall_ms"]);
         assert_eq!(json["authorization"], vector["authorization"]);
+        assert_eq!(json["source"], vector["source"]);
     }
     #[test]
     fn opt_in_bounded_numeric_schema() {

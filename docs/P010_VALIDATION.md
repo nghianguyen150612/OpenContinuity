@@ -31,8 +31,17 @@ necessary; a manifest assertion is not attestation.
 
 ## Validation execution
 
-Local Python tests: PASS (7 tests). Local Rust formatting, Clippy, workspace tests
-and build: execution in progress; see final PR/CI checks for final-head results.
+Local Python tests: PASS (7 tests). Local Rust formatting, Clippy with warnings
+denied, workspace tests (130 tests) and workspace build: PASS using Rust 1.85.0.
+`git diff --check`: PASS. The offline evidence fixture passes structural validation
+and fails `--require-physical` as intended. The shared simulated timing vector is
+consumed by both Rust and Swift tests; it contains no radio observations.
+[Draft PR #11](https://github.com/nghianguyen150612/OpenContinuity/pull/11) tracks
+final-head CI; its Checks tab links the exact SHA/run. Initial implementation
+[CI run](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/41014251766)
+was queued at this documentation update. Final-head status must be read from the
+PR checks rather than inferred from an earlier run.
+
 Swift package tests and actual watchOS SDK build require hosted Apple CI; no Apple
 SDK/Swift runtime is installed in this Debian executor. Hosted results are software
 results only. `git diff --check` is required before commit.
