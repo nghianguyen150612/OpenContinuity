@@ -24,6 +24,7 @@ use std::{
 
 mod bluez;
 mod gatt;
+mod qualification_diagnostics;
 
 const HELP: &str = concat!(
     "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\n",

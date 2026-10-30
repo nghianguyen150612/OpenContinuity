@@ -20,6 +20,7 @@ struct ResearchConsentView: View {
     let watchEnrollment: WatchEnrollment
     /// Passed in memory by a test harness. This view does not persist or export it.
     let researchSigningKey: P256.Signing.PrivateKey
+    var diagnostic: (GattDiagnostics.Outcome) -> Void = { _ in }
     let completion: (Result<SignedWatchResponse, ResearchConsentFailure>) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -80,9 +81,11 @@ struct ResearchConsentView: View {
             return
         }
 
+        diagnostic(.notRun) // Starts timing only; never a successful LA result.
         let context = LAContext()
         var policyError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &policyError) else {
+            diagnostic(.blocked)
             status = "watchOS does not support the requested local authentication policy here. No response was signed."
             finish(.failure(.unsupported))
             return
@@ -99,6 +102,7 @@ struct ResearchConsentView: View {
                 guard !completed else { return }
                 isEvaluating = false
                 authenticationContext = nil
+                diagnostic(success ? .pass : .fail)
                 guard success else {
                     if isCancellation(error) {
                         status = "Local authentication was cancelled. No response was signed."

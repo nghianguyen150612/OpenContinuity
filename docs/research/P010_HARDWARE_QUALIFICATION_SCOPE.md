@@ -1,6 +1,6 @@
 # P010 — Physical Watch ↔ Arch Linux BlueZ Qualification & Signed Research Evidence
 
-**Status:** STARTED — specification/branch only. Physical BLE hardware trial NOT RUN.
+**Status:** Software qualification tooling implemented; validation tracked in [P010 validation](../P010_VALIDATION.md). Physical BLE hardware acceptance BLOCKED; trials NOT RUN.
 **Branch:** `research/p010-watch-bluez-hardware-qualification`
 **Base main:** `c6028d88b346878c5e2127951ed8959bad64d967`
 **Merged prerequisite code:** P007B infrastructure PR #8 (squash `c6028d88...`), P009/P009A transport and temporary research enrollment PR #10 (squash `66ad10f4...`), P008 signed research protocol PR #9. All are **source/CI milestones**, not proof of real radio or Apple device behavior.

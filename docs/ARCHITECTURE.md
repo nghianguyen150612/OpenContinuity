@@ -43,3 +43,12 @@ These are planned boundaries, not P001 placeholder crates. Portable domain decis
 ## P006 provisional transport hardening
 
 The research GATT server now has per-client phase-based result ownership, bounded sessions and method calls, explicit cleanup reporting, and a read-only host qualification script. See [session hardening](research/P006_GATT_SESSION_HARDENING.md). Device paths and BlueZ connection events are not authentication; the ordered event monitor invalidates reported disconnects while polling is supplementary. Real BlueZ and Watch behavior remain NOT RUN; P007 client source now exists but has not been compiled with an Apple SDK. The production adapter and Qt6/QML Settings framework remain absent. Reports retain `authorization: never_evaluated`.
+
+## P010 physical qualification (provisional)
+
+Bounded opt-in timing diagnostics, strict evidence manifests and unsigned development
+build artifacts support physical qualification. Physical Watch/Arch BLE, signed
+exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
+workspace. Simulation and CI do not establish hardware compatibility. Both research
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization
+or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).

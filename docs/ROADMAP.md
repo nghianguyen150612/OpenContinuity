@@ -53,3 +53,12 @@ P008 adds a separate P-256/SHA-256 mutual-authentication profile, strict Rust an
 ## P009 — signed Watch research transport integration (provisional)
 
 P009 adds a separate `OC-WATCH-AUTH-TRANSPORT/1` Rust framing/ownership state machine and pure Swift counterpart, an isolated BlueZ service, and a CoreBluetooth client path. P009A adds a bounded readiness phase and separate request, consent and response deadlines, plus the foreground test-only enrollment flow. The Watch generates an ephemeral P-256 key in memory; Linux and Watch operators manually verify both public-key fingerprints before activation. The CI software path serializes a test-only Rust P008 request into frames, reassembles and verifies it in Swift/CryptoKit, signs a simulated rejection and returns serialized frames for Rust P008 verification. Physical BLE and LocalAuthentication evidence remain outstanding; no unlock or authorization is introduced. See the [deadline model](research/P009A_DEADLINE_MODEL.md), [temporary enrollment](research/P009A_TEMPORARY_ENROLLMENT.md), [security review](research/P009A_SECURITY_REVIEW.md), [physical plan](research/P009A_PHYSICAL_TEST_PLAN.md) and [validation record](P009A_VALIDATION.md).
+
+## P010 physical qualification (provisional)
+
+Bounded opt-in timing diagnostics, strict evidence manifests and unsigned development
+build artifacts support physical qualification. Physical Watch/Arch BLE, signed
+exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
+workspace. Simulation and CI do not establish hardware compatibility. Both research
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization
+or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).

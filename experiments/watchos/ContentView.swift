@@ -59,7 +59,8 @@ struct ContentView: View {
             ResearchConsentView(
                 verifiedRequest: presentation.verifiedRequest,
                 watchEnrollment: presentation.watchEnrollment,
-                researchSigningKey: presentation.signingKey
+                researchSigningKey: presentation.signingKey,
+                diagnostic: { outcome in bluetooth.recordLocalAuthentication(outcome, presentationID: presentation.id) }
             ) { result in
                 bluetooth.completeAuthenticatedConsent(result, presentationID: presentation.id)
             }

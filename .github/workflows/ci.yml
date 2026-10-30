@@ -81,4 +81,15 @@ jobs:
           xcodebuild -project experiments/watchos/OpenContinuityWatch.xcodeproj
           -scheme OpenContinuityWatch -configuration Debug
           -destination 'generic/platform=watchOS'
+          -derivedDataPath "$RUNNER_TEMP/p010-watch-build"
           CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned development app (local signing required)
+        run: >-
+          ditto -c -k --keepParent
+          "$RUNNER_TEMP/p010-watch-build/Build/Products/Debug-watchos/OpenContinuity Watch.app"
+          "$RUNNER_TEMP/OpenContinuityWatch-UNSIGNED-development.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenContinuityWatch-UNSIGNED-development-local-signing-required
+          path: ${{ runner.temp }}/OpenContinuityWatch-UNSIGNED-development.zip
+          retention-days: 7

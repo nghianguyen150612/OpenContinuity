@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "authorization": "never_evaluated",
+  "source": "host_preflight",
+  "versions": {
+    "app_revision": "unavailable",
+    "bluez": "unavailable",
+    "controller": "unavailable",
+    "firmware": "unavailable",
+    "kernel": "unavailable",
+    "linux": "unavailable",
+    "scanner": "unavailable",
+    "watch_model": "unavailable",
+    "watchos": "unavailable",
+    "xcode": "unavailable"
+  },
+  "stages": [
+    {
+      "stage": "gatt_registration",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "advertisement_registration",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "radio_advertisement",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "watch_discovery",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "watch_characteristics",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "challenge_read",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": 25,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "acknowledged_writes",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "result_read",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": 44,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "p007_digest",
+      "domain": "crypto",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "cancellation",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "reconnect",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "suspension",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "server_timeout",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "cleanup",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "pinned_enrollment",
+      "domain": "crypto",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "host_signature",
+      "domain": "crypto",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "request_delivery",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "local_authentication",
+      "domain": "consent",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "signed_rejection",
+      "domain": "consent",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "response_delivery",
+      "domain": "transport",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    },
+    {
+      "stage": "p009_verification",
+      "domain": "crypto",
+      "outcome": "BLOCKED",
+      "timestamp_utc": null,
+      "expected_bytes": null,
+      "actual_bytes": null,
+      "elapsed_ms": null,
+      "evidence_ref": null,
+      "error_class": "prerequisite_unavailable"
+    }
+  ]
+}
