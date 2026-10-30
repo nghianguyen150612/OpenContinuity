@@ -39,7 +39,7 @@ commands are documented separately; the CI minimum is Ubuntu 24.04 Qt 6.4.2.
 
 | Gate actually run | Result |
 | --- | --- |
-| CMake Debug configure and Ninja build | PASS; actual `opencontinuity-settings`, `settings-tests`, `doctor-fixture`, `settings-ui-smoke` targets built |
+| CMake Debug configure and Ninja build; Release with `BUILD_TESTING=OFF` | PASS; actual `opencontinuity-settings`, `settings-tests`, `doctor-fixture`, `settings-ui-smoke` targets built |
 | `doctor-backend` CTest | PASS; QtTest 62 passed, 0 failed, 0 skipped, including init/cleanup and real Rust CLI contract |
 | `qml-window-navigation` CTest | PASS; QtTest 5 passed, 0 failed, including light/dark/missing-CLI data cases and init/cleanup |
 | Overall `ctest --test-dir build/settings --output-on-failure --verbose` | PASS; 2/2 CTest entries |
@@ -63,7 +63,7 @@ recovery, report aging and the actual Rust report. The controlled native peer
 accepts only `doctor --json`, without shell or Bluetooth.
 
 Window tests instantiate the actual top-level ApplicationWindow resources, use
-native keyboard input to select every page, exercise Refresh and adjacent-page
+native keyboard input to select every page, exercise Refresh, mouse selection followed by adjacent-page
 shortcuts, resize to 1280×720, 2560×1440 and 760×560, and fail on QML warnings.
 A rendered pixel assertion verifies that the injected dark palette actually
 renders dark. Local light/dark captures were visually inspected. These are real
@@ -85,6 +85,12 @@ Qt windows using offscreen/software rendering, not HTML or syntax-only checks.
   two wall-clock reads raced a one-millisecond expiry/overlong margin. A scoped
   test-only commit uses injected activation time and an unambiguously overlong
   expiry. Runtime authentication behavior is unchanged; the full Rust gates pass.
+- Final navigation review removed a mouse-selection assignment that could break
+  the sidebar/shortcut binding. Selection now has one source of truth; the smoke
+  test clicks Overview then uses Alt+Right and verifies the selection. Its first
+  delegate lookup used QObject ownership and failed; visual-tree lookup now
+  matches QML ListView ownership, and all three UI cases pass. Explicit focus
+  outlines were added for keyboard navigation.
 - Formatting of that test needed `cargo fmt`; the required formatting check
   subsequently passes.
 
@@ -97,8 +103,8 @@ checks local-prefix installation and the installed native executable launch.
 Apple CI retains Swift package tests, both signed Rust/Swift interoperability
 paths, actual unsigned watchOS SDK compilation and development ZIP packaging.
 
-Hosted final-head checks are pending at this documentation commit. Read the
-P011 pull request Checks tab for the final SHA; prior green runs do not establish
+Hosted final-head checks are pending at this documentation commit. Read
+[PR #12 checks](https://github.com/nghianguyen150612/OpenContinuity/pull/12/checks) for the final SHA; prior green runs do not establish
 final-head success. The PR remains Draft until Qt and regression gates are
 verified. Local Debian cannot run Apple SDK/Swift/watchOS checks.
 

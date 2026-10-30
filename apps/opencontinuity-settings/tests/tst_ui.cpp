@@ -9,6 +9,17 @@
 #include <QSignalSpy>
 #include <QTest>
 
+// ListView delegates have QML context ownership; follow the visual tree for
+// clicks.
+static QQuickItem *visualItem(QQuickItem *root, const QString &name) {
+  if (root->objectName() == name)
+    return root;
+  for (auto *child : root->childItems())
+    if (auto *found = visualItem(child, name))
+      return found;
+  return nullptr;
+}
+
 class UiTest : public QObject {
   Q_OBJECT
 private slots:
@@ -81,6 +92,17 @@ private slots:
     }
     QTest::keyClick(window, Qt::Key_Left, Qt::AltModifier);
     QTRY_COMPARE(window->property("currentPage").toInt(), 6);
+    auto *overview = visualItem(nav, "nav0");
+    QVERIFY(overview);
+    QTest::mouseClick(
+        window, Qt::LeftButton, Qt::NoModifier,
+        overview
+            ->mapToScene(QPointF(overview->width() / 2, overview->height() / 2))
+            .toPoint());
+    QTRY_COMPARE(window->property("currentPage").toInt(), 0);
+    QTest::keyClick(window, Qt::Key_Right, Qt::AltModifier);
+    QTRY_COMPARE(window->property("currentPage").toInt(), 1);
+    QCOMPARE(nav->property("currentIndex").toInt(), 1);
     auto *refresh = window->findChild<QQuickItem *>("refresh");
     QVERIFY(refresh);
     QTest::mouseClick(

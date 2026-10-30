@@ -12,7 +12,7 @@ ApplicationWindow {
     minimumHeight: 560
     title: "OpenContinuity Settings"
     font.pixelSize: 14
-    property int currentPage: 0
+    property alias currentPage: navigation.currentIndex
     readonly property var pageNames: ["Overview", "Devices", "Apple Watch", "AirDrop", "AirPods", "Continuity", "Research Lab / Diagnostics", "About"]
     readonly property bool compact: width < 1000
     SystemPalette { id: systemColors; colorGroup: SystemPalette.Active }
@@ -54,11 +54,10 @@ ApplicationWindow {
                     spacing: 5
                     clip: true
                     model: window.pageNames
-                    currentIndex: window.currentPage
+                    currentIndex: 0
                     keyNavigationEnabled: true
                     activeFocusOnTab: true
                     Accessible.name: "Settings pages"
-                    onCurrentIndexChanged: window.currentPage = currentIndex
                     delegate: ItemDelegate {
                         required property int index
                         required property string modelData
@@ -70,9 +69,11 @@ ApplicationWindow {
                         background: Rectangle {
                             radius: 8
                             color: parent.highlighted ? window.palette.highlight : parent.hovered ? window.palette.midlight : "transparent"
+                            border.width: parent.activeFocus || (navigation.activeFocus && parent.highlighted) ? 2 : 0
+                            border.color: parent.highlighted ? window.palette.highlightedText : window.palette.highlight
                         }
                         activeFocusOnTab: true
-                        onClicked: { window.currentPage = index; navigation.currentIndex = index }
+                        onClicked: window.currentPage = index
                         ToolTip.visible: hovered
                         ToolTip.text: modelData
                         Accessible.name: modelData
