@@ -1,14 +1,21 @@
-//! Opt-in Linux BlueZ GATT experiment. This transport is synthetic and never
-//! participates in OS authentication or authorization.
+//! Opt-in Linux BlueZ GATT research transports. P007 is synthetic; P009 carries
+//! separately signed research messages and neither participates in OS
+//! authentication or authorization.
 
+use opencontinuity_core::watch_auth_research::{HostEnrollment, WatchEnrollment};
+use p256::ecdsa::SigningKey;
 use serde::Serialize;
 use std::{
     sync::{Arc, atomic::AtomicBool},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const MAX_DURATION_SECONDS: u16 = 300;
 pub const MIN_DURATION_SECONDS: u16 = 1;
+pub const MAX_AUTH_RUNTIME_SECONDS: u16 = 60;
+pub const MAX_TEST_ENROLLMENT_LIFETIME_MS: u64 = 3_600_000;
+pub const BLUEZ_METHOD_TIMEOUT: Duration = Duration::from_secs(2);
+pub const BLUEZ_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Serialize)]
 pub struct ExperimentReport {
@@ -35,6 +42,26 @@ pub struct ExperimentError {
     pub report: Box<ExperimentReport>,
 }
 
+/// Per-invocation, in-memory inputs for the separately opted-in P009 server.
+/// Enrollments must be independently supplied and P008 test-only until a
+/// reviewed production enrollment scheme exists.
+pub struct AuthTransportConfig {
+    pub host_signing_key: SigningKey,
+    pub host_enrollment: HostEnrollment,
+    pub watch_enrollment: WatchEnrollment,
+    pub enrollment_expires_at_unix_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthExperimentReport {
+    pub transport: ExperimentReport,
+    pub research_decision: Option<&'static str>,
+    pub host_public_key_fingerprint_sha256: String,
+    pub watch_public_key_fingerprint_sha256: String,
+    pub enrollment_expires_at_unix_ms: u64,
+    pub authorization: &'static str,
+}
+
 pub fn validate_options(adapter: &str, duration: u16, experimental: bool) -> Result<(), String> {
     if !experimental {
         return Err("the GATT server requires explicit --experimental opt-in".into());
@@ -59,8 +86,21 @@ mod linux {
         ControlCommand, FrameAssembler, FrameProgress, MAX_ATT_MTU, MIN_ATT_MTU, WIRE_VERSION,
         WireError,
     };
+    use opencontinuity_core::{
+        watch_auth_research::{
+            Decision, ReplayGuard, VerifiedHostRequest, WatchAuthResponse, build_host_request,
+            verify_host_request, verify_watch_response,
+        },
+        watch_auth_transport::{
+            BLE_INACTIVITY_TIMEOUT, Direction as AuthDirection, REQUEST_TRANSFER_TIMEOUT,
+            RESPONSE_TRANSFER_TIMEOUT, RequestChunkMailbox, RequestCommand, SignedEnvelope,
+            TransferAssembler, TransportError as AuthTransportError, WAITING_FOR_CLIENT_TIMEOUT,
+            WAITING_FOR_CONSENT_TIMEOUT, parse_request_command,
+        },
+    };
+    use p256::ecdsa::SigningKey;
     use sha2::{Digest, Sha256};
-    use std::{collections::HashMap, fs::File, io::Read, sync::Mutex, thread, time::Instant};
+    use std::{collections::HashMap, fs::File, io::Read, sync::Mutex, thread};
     use zbus::{
         DBusError,
         blocking::{Connection, Proxy},
@@ -79,6 +119,16 @@ mod linux {
     const EXCHANGE_UUID: &str = "8e6f0004-6f4e-4c4f-9b4f-4f70656e436f";
     const RESPONSE_UUID: &str = "8e6f0005-6f4e-4c4f-9b4f-4f70656e436f";
     const CONTROL_UUID: &str = "8e6f0006-6f4e-4c4f-9b4f-4f70656e436f";
+    const AUTH_SERVICE_UUID: &str = opencontinuity_core::watch_auth_transport::SERVICE_UUID;
+    const AUTH_REQUEST_DATA_UUID: &str =
+        opencontinuity_core::watch_auth_transport::REQUEST_DATA_UUID;
+    const AUTH_REQUEST_CONTROL_UUID: &str =
+        opencontinuity_core::watch_auth_transport::REQUEST_CONTROL_UUID;
+    const AUTH_RESPONSE_DATA_UUID: &str =
+        opencontinuity_core::watch_auth_transport::RESPONSE_DATA_UUID;
+    const AUTH_RESPONSE_CONTROL_UUID: &str =
+        opencontinuity_core::watch_auth_transport::RESPONSE_CONTROL_UUID;
+    const AUTH_STATUS_UUID: &str = opencontinuity_core::watch_auth_transport::STATUS_UUID;
 
     #[derive(Debug, DBusError)]
     #[zbus(prefix = "org.bluez.Error")]
@@ -115,6 +165,47 @@ mod linux {
     const MAX_DEVICE_PATH: usize = 128;
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn response_transfer_timeout(now: Instant, signed_deadline: Instant) -> Duration {
+        RESPONSE_TRANSFER_TIMEOUT.min(signed_deadline.saturating_duration_since(now))
+    }
+
+    fn consent_deadline_elapsed(
+        consent_deadline: Option<Instant>,
+        response_started: bool,
+        now: Instant,
+    ) -> bool {
+        !response_started && consent_deadline.is_some_and(|deadline| now >= deadline)
+    }
+
+    fn transfer_deadline_reason(inner: &AuthSessionInner, now: Instant) -> Option<&'static str> {
+        let owner = inner.owner.as_deref()?;
+        if !inner.request_complete {
+            if let Some(mailbox) = &inner.request_mailbox {
+                match mailbox.validate_live(owner, inner.transfer_id, now) {
+                    Err(AuthTransportError::TransferExpired) => {
+                        return Some("request_transfer_timeout");
+                    }
+                    Err(AuthTransportError::InactivityExpired) => {
+                        return Some("ble_inactivity_timeout");
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(assembler) = &inner.response_assembler {
+            match assembler.validate_live(owner, inner.transfer_id, now) {
+                Err(AuthTransportError::TransferExpired) => {
+                    return Some("response_transfer_timeout");
+                }
+                Err(AuthTransportError::InactivityExpired) => {
+                    return Some("ble_inactivity_timeout");
+                }
+                _ => {}
+            }
+        }
+        None
+    }
 
     fn option_u16(
         options: &HashMap<String, OwnedValue>,
@@ -239,6 +330,691 @@ mod linux {
         }
     }
 
+    struct AuthSessionInner {
+        transfer_id: [u8; 8],
+        envelope: Option<SignedEnvelope>,
+        envelope_length: u16,
+        owner: Option<String>,
+        request_mailbox: Option<RequestChunkMailbox>,
+        requested_frame: Option<Vec<u8>>,
+        request_complete: bool,
+        response_assembler: Option<TransferAssembler>,
+        verified_request: Option<VerifiedHostRequest>,
+        response_replay: ReplayGuard,
+        expires_at_ms: u64,
+        signed_deadline: Instant,
+        client_deadline: Instant,
+        consent_deadline: Option<Instant>,
+        retired: bool,
+        terminal_reason: Option<&'static str>,
+        decision: Option<&'static str>,
+    }
+
+    struct AuthTransportState {
+        host_enrollment: HostEnrollment,
+        watch_enrollment: WatchEnrollment,
+        enrollment_expires_at_unix_ms: u64,
+        host_fingerprint: String,
+        watch_fingerprint: String,
+        host_signing_key: Mutex<Option<SigningKey>>,
+        inner: Mutex<Option<AuthSessionInner>>,
+    }
+
+    impl AuthTransportState {
+        fn new(config: AuthTransportConfig) -> Result<Self, String> {
+            if !config.host_enrollment.test_only || !config.watch_enrollment.test_only {
+                return Err(
+                    "P009 live enrollment is blocked; only explicit test-only pins are accepted"
+                        .into(),
+                );
+            }
+            if config.host_enrollment.state
+                != opencontinuity_core::watch_auth_research::EnrollmentState::Active
+                || config.watch_enrollment.state
+                    != opencontinuity_core::watch_auth_research::EnrollmentState::Active
+                || config.host_enrollment.key_algorithm
+                    != opencontinuity_core::watch_auth_research::KeyAlgorithm::P256EcdsaSha256
+                || config.watch_enrollment.key_algorithm
+                    != opencontinuity_core::watch_auth_research::KeyAlgorithm::P256EcdsaSha256
+                || config.host_enrollment.key_version != 1
+                || config.watch_enrollment.key_version != 1
+                || config.watch_enrollment.bound_host_enrollment_id
+                    != config.host_enrollment.enrollment_id
+                || config.watch_enrollment.bound_host_identity
+                    != config.host_enrollment.host_identity
+                || config.watch_enrollment.bound_linux_uid != config.host_enrollment.linux_uid
+            {
+                return Err(
+                    "P009 Watch enrollment is inactive or not bound to the selected host/account"
+                        .into(),
+                );
+            }
+            let now_ms = unix_now_ms()?;
+            if config.enrollment_expires_at_unix_ms <= now_ms {
+                return Err(
+                    "test enrollment is expired; import and pin a fresh test enrollment".into(),
+                );
+            }
+            if config.enrollment_expires_at_unix_ms - now_ms > MAX_TEST_ENROLLMENT_LIFETIME_MS {
+                return Err("test enrollment exceeds the one-hour validity limit".into());
+            }
+            let host_public = hex_bytes(
+                config
+                    .host_signing_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes(),
+            );
+            if host_public != config.host_enrollment.public_key_sec1_hex {
+                return Err(
+                    "host signing key does not match the independently pinned host public key"
+                        .into(),
+                );
+            }
+            let watch_public = decode_lower_hex(&config.watch_enrollment.public_key_sec1_hex)?;
+            p256::ecdsa::VerifyingKey::from_sec1_bytes(&watch_public).map_err(|_| {
+                "Watch enrollment public key is incomplete or invalid P-256 SEC1".to_owned()
+            })?;
+            let host_fingerprint = fingerprint(
+                config
+                    .host_signing_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes(),
+            );
+            let watch_fingerprint = fingerprint(&watch_public);
+            Ok(Self {
+                host_enrollment: config.host_enrollment,
+                watch_enrollment: config.watch_enrollment,
+                enrollment_expires_at_unix_ms: config.enrollment_expires_at_unix_ms,
+                host_fingerprint,
+                watch_fingerprint,
+                host_signing_key: Mutex::new(Some(config.host_signing_key)),
+                inner: Mutex::new(None),
+            })
+        }
+
+        /// Sign only after BlueZ has registered both objects and the
+        /// advertisement is ready, so setup delay cannot consume P008 TTL.
+        fn activate(&self, ready_at: Instant) -> Result<(), String> {
+            self.activate_at(ready_at, unix_now_ms()?)
+        }
+
+        fn activate_at(&self, ready_at: Instant, now_ms: u64) -> Result<(), String> {
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| "research session state lock poisoned".to_owned())?;
+            if guard.is_some() {
+                return Err("research session was already initialized".into());
+            }
+            if self.enrollment_expires_at_unix_ms <= now_ms {
+                return Err(
+                    "test enrollment expired during BlueZ setup; no request was signed".into(),
+                );
+            }
+            let signing_key = self
+                .host_signing_key
+                .lock()
+                .map_err(|_| "host signing key state lock poisoned".to_owned())?
+                .take()
+                .ok_or_else(|| "host signing key was already consumed".to_owned())?;
+            let enrollment_remaining_ms = self.enrollment_expires_at_unix_ms - now_ms;
+            let request_lifetime_ms =
+                opencontinuity_core::watch_auth_research::MAX_REQUEST_LIFETIME_MS
+                    .min(enrollment_remaining_ms);
+            let signed = build_host_request(
+                &self.host_enrollment,
+                &signing_key,
+                self.watch_enrollment.enrollment_id.clone(),
+                now_ms,
+                request_lifetime_ms,
+            )
+            .map_err(|error| {
+                format!("could not create fresh P008 request at readiness: {error}")
+            })?;
+            drop(signing_key);
+            let canonical = signed
+                .request
+                .canonical_bytes()
+                .map_err(|error| format!("could not encode fresh P008 request: {error}"))?;
+            let envelope = SignedEnvelope::new(
+                AuthDirection::HostToWatch,
+                &canonical,
+                &signed.signature_raw,
+            )
+            .map_err(|error| format!("fresh P008 request is not a valid envelope: {error:?}"))?;
+            let verified_request = verify_host_request(
+                Some(&self.host_enrollment),
+                signed.request.clone(),
+                &signed.signature_raw,
+                &self.watch_enrollment.enrollment_id,
+                now_ms,
+                &mut ReplayGuard::default(),
+            )
+            .map_err(|error| format!("fresh host request verification failed: {error}"))?;
+            let transfer_id = random_bytes::<8>()
+                .map_err(|error| format!("random source unavailable: {error}"))?;
+            let envelope_length = u16::try_from(envelope.as_bytes().len())
+                .map_err(|_| "signed request envelope is too large".to_owned())?;
+            let signed_remaining = signed
+                .request
+                .expires_at_ms
+                .checked_sub(now_ms)
+                .ok_or_else(|| "fresh signed request expired before readiness".to_owned())?;
+            *guard = Some(AuthSessionInner {
+                transfer_id,
+                envelope: Some(envelope),
+                envelope_length,
+                owner: None,
+                request_mailbox: None,
+                requested_frame: None,
+                request_complete: false,
+                response_assembler: None,
+                verified_request: Some(verified_request),
+                response_replay: ReplayGuard::default(),
+                expires_at_ms: signed.request.expires_at_ms,
+                signed_deadline: ready_at + Duration::from_millis(signed_remaining),
+                client_deadline: ready_at + WAITING_FOR_CLIENT_TIMEOUT,
+                consent_deadline: None,
+                retired: false,
+                terminal_reason: None,
+                decision: None,
+            });
+            Ok(())
+        }
+
+        fn claim_owner(
+            inner: &mut AuthSessionInner,
+            device: &str,
+            now: Instant,
+            now_ms: u64,
+        ) -> Result<(), BluezGattError> {
+            if inner.retired || inner.decision.is_some() {
+                return Err(BluezGattError::NotPermitted(
+                    "research session is no longer available".into(),
+                ));
+            }
+            if now >= inner.signed_deadline || now_ms >= inner.expires_at_ms {
+                Self::retire(inner, "signed_request_expired");
+                return Err(BluezGattError::NotPermitted(
+                    "signed P008 request expired; start a new research server session for a fresh request, nonce, and session".into(),
+                ));
+            }
+            if inner.owner.is_none() && now >= inner.client_deadline {
+                Self::retire(inner, "client_wait_timeout");
+                return Err(BluezGattError::NotPermitted(
+                    "no Watch connected before the bounded client wait ended; start a new research server session".into(),
+                ));
+            }
+            if consent_deadline_elapsed(
+                inner.consent_deadline,
+                inner.response_assembler.is_some(),
+                now,
+            ) {
+                Self::retire(inner, "consent_timeout");
+                return Err(BluezGattError::NotPermitted(
+                    "waiting-for-consent deadline elapsed; start a new session with a fresh signed request".into(),
+                ));
+            }
+            match &inner.owner {
+                Some(owner) if owner != device => {
+                    return Err(BluezGattError::NotPermitted(
+                        "another client owns this research session".into(),
+                    ));
+                }
+                Some(_) => return Ok(()),
+                None => {}
+            }
+            let envelope = inner.envelope.as_ref().ok_or_else(|| {
+                BluezGattError::NotPermitted("research request was invalidated".into())
+            })?;
+            let mailbox = RequestChunkMailbox::new_with_timeout(
+                inner.transfer_id,
+                device,
+                envelope,
+                23,
+                now,
+                REQUEST_TRANSFER_TIMEOUT.min(inner.signed_deadline.saturating_duration_since(now)),
+                Some(BLE_INACTIVITY_TIMEOUT),
+            )
+            .map_err(auth_transport_error)?;
+            inner.owner = Some(device.to_owned());
+            inner.request_mailbox = Some(mailbox);
+            Ok(())
+        }
+
+        fn read(
+            &self,
+            device: &str,
+            kind: CharacteristicKind,
+            offset: usize,
+            mtu: usize,
+        ) -> Result<Vec<u8>, BluezGattError> {
+            if offset != 0 {
+                return Err(BluezGattError::InvalidOffset(
+                    "P009 values use explicit chunk indices".into(),
+                ));
+            }
+            let now = Instant::now();
+            let now_ms = unix_now_ms().map_err(BluezGattError::Failed)?;
+            let mut guard = self.inner.lock().map_err(|_| {
+                BluezGattError::Failed("research session state lock poisoned".into())
+            })?;
+            let inner = guard.as_mut().ok_or_else(|| BluezGattError::NotPermitted(
+                "research transport is not ready; request signing follows successful BlueZ registration".into()
+            ))?;
+            Self::claim_owner(inner, device, now, now_ms)?;
+            let value = match kind {
+                CharacteristicKind::AuthStatus => [
+                    vec![
+                        b'O',
+                        b'A',
+                        opencontinuity_core::watch_auth_transport::PROTOCOL_VERSION,
+                    ],
+                    inner.transfer_id.to_vec(),
+                    inner.envelope_length.to_le_bytes().to_vec(),
+                ]
+                .concat(),
+                CharacteristicKind::AuthRequestData => {
+                    inner
+                        .request_mailbox
+                        .as_ref()
+                        .ok_or_else(|| {
+                            BluezGattError::NotPermitted("request mailbox is unavailable".into())
+                        })?
+                        .validate_live(device, inner.transfer_id, Instant::now())
+                        .map_err(auth_transport_error)?;
+                    inner.requested_frame.clone().ok_or_else(|| {
+                        BluezGattError::NotPermitted(
+                            "request frame requires an explicit GET".into(),
+                        )
+                    })?
+                }
+                _ => {
+                    return Err(BluezGattError::NotPermitted(
+                        "characteristic is not readable".into(),
+                    ));
+                }
+            };
+            if value.len() > mtu.saturating_sub(1) {
+                return Err(BluezGattError::InvalidValueLength(
+                    "P009 read value exceeds the negotiated ATT limit".into(),
+                ));
+            }
+            Ok(value)
+        }
+
+        fn write(
+            &self,
+            device: &str,
+            kind: CharacteristicKind,
+            value: &[u8],
+            mtu: usize,
+        ) -> Result<(), BluezGattError> {
+            let now = Instant::now();
+            let now_ms = unix_now_ms().map_err(BluezGattError::Failed)?;
+            self.write_at(device, kind, value, mtu, now, now_ms)
+        }
+
+        fn write_at(
+            &self,
+            device: &str,
+            kind: CharacteristicKind,
+            value: &[u8],
+            mtu: usize,
+            now: Instant,
+            now_ms: u64,
+        ) -> Result<(), BluezGattError> {
+            let mut guard = self.inner.lock().map_err(|_| {
+                BluezGattError::Failed("research session state lock poisoned".into())
+            })?;
+            let inner = guard.as_mut().ok_or_else(|| BluezGattError::NotPermitted(
+                "research transport is not ready; request signing follows successful BlueZ registration".into()
+            ))?;
+            Self::claim_owner(inner, device, now, now_ms)?;
+            match kind {
+                CharacteristicKind::AuthRequestControl => {
+                    let (transfer_id, command) =
+                        parse_request_command(value).map_err(auth_transport_error)?;
+                    if transfer_id != inner.transfer_id {
+                        return Err(auth_transport_error(AuthTransportError::SessionMismatch));
+                    }
+                    let mailbox = inner.request_mailbox.as_mut().ok_or_else(|| {
+                        BluezGattError::NotPermitted("request mailbox is unavailable".into())
+                    })?;
+                    match command {
+                        RequestCommand::Get { index } => {
+                            inner.requested_frame = Some(
+                                mailbox
+                                    .get(device, transfer_id, index as usize, now)
+                                    .map_err(auth_transport_error)?
+                                    .to_vec(),
+                            );
+                        }
+                        RequestCommand::Ack { index } => {
+                            mailbox
+                                .acknowledge(device, transfer_id, index as usize, now)
+                                .map_err(auth_transport_error)?;
+                            inner.requested_frame = None;
+                        }
+                        RequestCommand::Complete => {
+                            mailbox
+                                .complete(device, transfer_id, now)
+                                .map_err(auth_transport_error)?;
+                            inner.request_complete = true;
+                            inner.consent_deadline = Some(
+                                now + WAITING_FOR_CONSENT_TIMEOUT
+                                    .min(inner.signed_deadline.saturating_duration_since(now)),
+                            );
+                            inner.requested_frame = None;
+                        }
+                        RequestCommand::Cancel => {
+                            mailbox
+                                .cancel(device, transfer_id)
+                                .map_err(auth_transport_error)?;
+                            Self::retire(inner, "watch_cancelled");
+                        }
+                    }
+                    Ok(())
+                }
+                CharacteristicKind::AuthResponseData => {
+                    if !inner.request_complete {
+                        return Err(BluezGattError::NotPermitted(
+                            "signed request delivery must complete first".into(),
+                        ));
+                    }
+                    if inner.decision.is_some() {
+                        return Err(BluezGattError::NotPermitted(
+                            "research response was already completed".into(),
+                        ));
+                    }
+                    let starts_response = inner.response_assembler.is_none();
+                    if starts_response {
+                        let phase_timeout = response_transfer_timeout(now, inner.signed_deadline);
+                        if phase_timeout.is_zero() {
+                            Self::retire(inner, "signed_request_expired");
+                            return Err(BluezGattError::NotPermitted(
+                                "signed request expired before the Watch response began; start a new session".into(),
+                            ));
+                        }
+                        inner.response_assembler = Some(TransferAssembler::new_with_timeout(
+                            inner.transfer_id,
+                            AuthDirection::WatchToHost,
+                            device,
+                            now,
+                            phase_timeout,
+                            Some(BLE_INACTIVITY_TIMEOUT),
+                        ));
+                    }
+                    let result = inner
+                        .response_assembler
+                        .as_mut()
+                        .expect("assembler created above")
+                        .push(device, AuthDirection::WatchToHost, value, mtu, now)
+                        .map_err(auth_transport_error);
+                    if result.is_err() {
+                        Self::retire(inner, "invalid_response_transport");
+                    } else if starts_response {
+                        // Consent has been delivered and the first valid response
+                        // frame owns the separate response-transfer deadline.
+                        inner.consent_deadline = None;
+                    }
+                    result
+                }
+                CharacteristicKind::AuthResponseControl => {
+                    let (transfer_id, command) =
+                        parse_request_command(value).map_err(auth_transport_error)?;
+                    if transfer_id != inner.transfer_id {
+                        return Err(auth_transport_error(AuthTransportError::SessionMismatch));
+                    }
+                    match command {
+                        RequestCommand::Cancel => {
+                            Self::retire(inner, "watch_cancelled");
+                            Ok(())
+                        }
+                        RequestCommand::Complete => {
+                            if !inner.request_complete {
+                                return Err(BluezGattError::NotPermitted(
+                                    "signed request delivery must complete first".into(),
+                                ));
+                            }
+                            let envelope = inner
+                                .response_assembler
+                                .as_mut()
+                                .ok_or_else(|| {
+                                    auth_transport_error(AuthTransportError::IncompleteTransfer)
+                                })?
+                                .complete(device, transfer_id, now)
+                                .map_err(auth_transport_error)?;
+                            let response = WatchAuthResponse::parse_canonical(envelope.canonical())
+                                .map_err(|error| {
+                                    BluezGattError::NotAuthorized(format!(
+                                        "invalid signed response: {error}"
+                                    ))
+                                })?;
+                            let AuthSessionInner {
+                                verified_request,
+                                response_replay,
+                                ..
+                            } = &mut *inner;
+                            let verified_request = verified_request.as_ref().ok_or_else(|| {
+                                BluezGattError::NotPermitted(
+                                    "verified request token was discarded".into(),
+                                )
+                            })?;
+                            if let Err(error) = verify_watch_response(
+                                &self.host_enrollment,
+                                Some(&self.watch_enrollment),
+                                verified_request,
+                                &response,
+                                envelope.signature(),
+                                now_ms,
+                                response_replay,
+                            ) {
+                                Self::retire(inner, "response_verification_failed");
+                                return Err(BluezGattError::NotAuthorized(format!(
+                                    "P008 response verification failed: {error}"
+                                )));
+                            }
+                            inner.decision = Some(match response.decision {
+                                Decision::Approved => "approved",
+                                Decision::Rejected => "rejected",
+                            });
+                            inner.verified_request = None;
+                            Ok(())
+                        }
+                        _ => Err(auth_transport_error(
+                            AuthTransportError::InvalidChunkCommand,
+                        )),
+                    }
+                }
+                _ => Err(BluezGattError::NotPermitted(
+                    "characteristic is not writable".into(),
+                )),
+            }
+        }
+
+        fn invalidate(&self, device: &str) {
+            if let Ok(mut guard) = self.inner.lock() {
+                if let Some(inner) = guard.as_mut() {
+                    if inner.owner.as_deref() == Some(device) {
+                        Self::retire(inner, "connection_lost");
+                    }
+                }
+            }
+        }
+
+        fn invalidate_all(&self) {
+            if let Ok(mut guard) = self.inner.lock() {
+                if let Some(inner) = guard.as_mut() {
+                    Self::retire(inner, "server_stopped");
+                }
+            }
+        }
+
+        fn prune(&self, connected: &HashMap<String, bool>) {
+            if let Ok(mut guard) = self.inner.lock() {
+                let Some(inner) = guard.as_mut() else {
+                    return;
+                };
+                if inner
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| !connected.get(owner).copied().unwrap_or(false))
+                {
+                    Self::retire(inner, "connection_lost");
+                } else if Instant::now() >= inner.signed_deadline
+                    || unix_now_ms().is_ok_and(|now| now >= inner.expires_at_ms)
+                {
+                    Self::retire(inner, "signed_request_expired");
+                } else if inner.owner.is_none() && Instant::now() >= inner.client_deadline {
+                    Self::retire(inner, "client_wait_timeout");
+                } else if let Some(reason) = transfer_deadline_reason(inner, Instant::now()) {
+                    Self::retire(inner, reason);
+                } else if consent_deadline_elapsed(
+                    inner.consent_deadline,
+                    inner.response_assembler.is_some(),
+                    Instant::now(),
+                ) {
+                    Self::retire(inner, "consent_timeout");
+                }
+            }
+        }
+
+        fn decision(&self) -> Option<&'static str> {
+            self.inner
+                .lock()
+                .ok()
+                .and_then(|guard| guard.as_ref().and_then(|inner| inner.decision))
+        }
+
+        fn host_fingerprint(&self) -> &str {
+            &self.host_fingerprint
+        }
+
+        fn watch_fingerprint(&self) -> &str {
+            &self.watch_fingerprint
+        }
+
+        fn deadline_shutdown_reason(&self) -> Option<&'static str> {
+            self.deadline_shutdown_reason_at(Instant::now(), unix_now_ms().ok())
+        }
+
+        fn deadline_shutdown_reason_at(
+            &self,
+            now: Instant,
+            now_ms: Option<u64>,
+        ) -> Option<&'static str> {
+            let mut guard = self.inner.lock().ok()?;
+            let inner = guard.as_mut()?;
+            if let Some(reason) = inner.terminal_reason {
+                return Some(reason);
+            }
+            let reason = if now >= inner.signed_deadline
+                || now_ms.is_some_and(|now_ms| now_ms >= inner.expires_at_ms)
+            {
+                Some("signed_request_expired")
+            } else if inner.owner.is_none() && now >= inner.client_deadline {
+                Some("client_wait_timeout")
+            } else if let Some(reason) = transfer_deadline_reason(inner, now) {
+                Some(reason)
+            } else if consent_deadline_elapsed(
+                inner.consent_deadline,
+                inner.response_assembler.is_some(),
+                now,
+            ) {
+                Some("consent_timeout")
+            } else {
+                None
+            }?;
+            Self::retire(inner, reason);
+            Some(reason)
+        }
+
+        fn retire(inner: &mut AuthSessionInner, reason: &'static str) {
+            inner.retired = true;
+            inner.terminal_reason = Some(reason);
+            inner.envelope = None;
+            inner.request_mailbox = None;
+            inner.requested_frame = None;
+            inner.response_assembler = None;
+            inner.verified_request = None;
+        }
+    }
+
+    fn unix_now_ms() -> Result<u64, String> {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+            .map_err(|_| "system clock is before the Unix epoch".to_owned())
+    }
+
+    fn hex_bytes(bytes: &[u8]) -> String {
+        use std::fmt::Write as _;
+        let mut encoded = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        encoded
+    }
+
+    fn decode_lower_hex(value: &str) -> Result<Vec<u8>, String> {
+        if value.len() % 2 != 0
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("public key must use lowercase hexadecimal SEC1 bytes".into());
+        }
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let digit = |byte: u8| match byte {
+                    b'0'..=b'9' => Ok(byte - b'0'),
+                    b'a'..=b'f' => Ok(byte - b'a' + 10),
+                    _ => Err("invalid lowercase hexadecimal public key".to_owned()),
+                };
+                Ok((digit(pair[0])? << 4) | digit(pair[1])?)
+            })
+            .collect()
+    }
+
+    fn fingerprint(public_key: &[u8]) -> String {
+        hex_bytes(&Sha256::digest(public_key))
+    }
+
+    fn auth_transport_error(error: AuthTransportError) -> BluezGattError {
+        use AuthTransportError as E;
+        match error {
+            E::FrameTooLarge | E::MessageTooLarge | E::LengthMismatch => {
+                BluezGattError::InvalidValueLength(format!(
+                    "invalid research transport value: {error:?}"
+                ))
+            }
+            E::OwnerMismatch
+            | E::SessionMismatch
+            | E::DirectionMismatch
+            | E::VersionMismatch
+            | E::DuplicateOrOutOfOrder
+            | E::StartRequired
+            | E::MessageInProgress
+            | E::InvalidEnvelope
+            | E::Malformed
+            | E::InvalidAttMtu
+            | E::TransferExpired
+            | E::InactivityExpired
+            | E::IncompleteTransfer
+            | E::AlreadyCompleted
+            | E::DuplicateCompletion
+            | E::Cancelled
+            | E::InvalidChunkCommand => BluezGattError::NotPermitted(format!(
+                "research transport rejected value: {error:?}"
+            )),
+        }
+    }
+
     fn error_code(error: WireError) -> u8 {
         use WireError::*;
         match error {
@@ -257,12 +1033,28 @@ mod linux {
         }
     }
 
-    #[derive(Default)]
     struct GattState {
         clients: Mutex<HashMap<String, ClientSession>>,
+        auth_transport: Option<Arc<AuthTransportState>>,
+    }
+
+    impl Default for GattState {
+        fn default() -> Self {
+            Self {
+                clients: Mutex::new(HashMap::new()),
+                auth_transport: None,
+            }
+        }
     }
 
     impl GattState {
+        fn with_auth_transport(auth_transport: Arc<AuthTransportState>) -> Self {
+            Self {
+                clients: Mutex::new(HashMap::new()),
+                auth_transport: Some(auth_transport),
+            }
+        }
+
         fn client_value(
             &self,
             device: &str,
@@ -272,6 +1064,17 @@ mod linux {
         ) -> Result<Vec<u8>, BluezGattError> {
             if kind == CharacteristicKind::Version {
                 return read_fragment(&[WIRE_VERSION], offset, mtu);
+            }
+            if kind.is_auth() {
+                return self
+                    .auth_transport
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BluezGattError::NotPermitted(
+                            "authenticated transport is unavailable".into(),
+                        )
+                    })?
+                    .read(device, kind, offset, mtu);
             }
             let mut clients = self
                 .clients
@@ -384,6 +1187,21 @@ mod linux {
             }
         }
 
+        fn write_auth(
+            &self,
+            device: &str,
+            kind: CharacteristicKind,
+            value: &[u8],
+            mtu: usize,
+        ) -> Result<(), BluezGattError> {
+            self.auth_transport
+                .as_ref()
+                .ok_or_else(|| {
+                    BluezGattError::NotPermitted("authenticated transport is unavailable".into())
+                })?
+                .write(device, kind, value, mtu)
+        }
+
         fn write_control(&self, device: &str, value: &[u8]) -> Result<(), BluezGattError> {
             let mut clients = self
                 .clients
@@ -440,6 +1258,9 @@ mod linux {
                 .lock()
                 .map_err(|_| "GATT client state lock poisoned".to_owned())?
                 .remove(device);
+            if let Some(auth) = &self.auth_transport {
+                auth.invalidate(device);
+            }
             Ok(())
         }
 
@@ -452,6 +1273,9 @@ mod linux {
             clients.retain(|device, session| {
                 connected.get(device).copied().unwrap_or(false) && !session.expired(now)
             });
+            if let Some(auth) = &self.auth_transport {
+                auth.prune(connected);
+            }
             Ok(())
         }
     }
@@ -505,6 +1329,9 @@ mod linux {
             }
             if let Ok(mut clients) = state.clients.lock() {
                 clients.clear();
+            }
+            if let Some(auth) = &state.auth_transport {
+                auth.invalidate_all();
             }
         }
 
@@ -823,9 +1650,28 @@ mod linux {
         Exchange,
         Response,
         Control,
+        AuthRequestData,
+        AuthRequestControl,
+        AuthResponseData,
+        AuthResponseControl,
+        AuthStatus,
+    }
+
+    impl CharacteristicKind {
+        fn is_auth(self) -> bool {
+            matches!(
+                self,
+                Self::AuthRequestData
+                    | Self::AuthRequestControl
+                    | Self::AuthResponseData
+                    | Self::AuthResponseControl
+                    | Self::AuthStatus
+            )
+        }
     }
 
     struct GattService {
+        uuid: String,
         characteristics: Vec<String>,
     }
 
@@ -833,7 +1679,7 @@ mod linux {
     impl GattService {
         #[zbus(property, name = "UUID")]
         fn uuid(&self) -> &str {
-            SERVICE_UUID
+            &self.uuid
         }
 
         #[zbus(property)]
@@ -924,6 +1770,11 @@ mod linux {
             self.gate.with_live(|| match self.kind {
                 CharacteristicKind::Exchange => self.state.write_exchange(&device, &value, mtu),
                 CharacteristicKind::Control => self.state.write_control(&device, &value),
+                CharacteristicKind::AuthRequestControl
+                | CharacteristicKind::AuthResponseData
+                | CharacteristicKind::AuthResponseControl => {
+                    self.state.write_auth(&device, self.kind, &value, mtu)
+                }
                 _ => Err(BluezGattError::NotPermitted(
                     "characteristic is read-only".into(),
                 )),
@@ -931,7 +1782,10 @@ mod linux {
         }
     }
 
-    struct LeAdvertisement;
+    struct LeAdvertisement {
+        service_uuid: String,
+        local_name: String,
+    }
 
     #[zbus::interface(name = "org.bluez.LEAdvertisement1")]
     impl LeAdvertisement {
@@ -942,12 +1796,12 @@ mod linux {
 
         #[zbus(property, name = "ServiceUUIDs")]
         fn service_uuids(&self) -> Vec<String> {
-            vec![SERVICE_UUID.to_owned()]
+            vec![self.service_uuid.clone()]
         }
 
         #[zbus(property)]
         fn local_name(&self) -> &str {
-            "OC Research"
+            &self.local_name
         }
 
         fn release(&self) {}
@@ -1186,13 +2040,64 @@ mod linux {
         }
     }
 
+    fn setup_deadline_error(
+        adapter: &str,
+        duration: u16,
+        stage: &'static str,
+        deadline: Instant,
+    ) -> Option<ExperimentError> {
+        setup_deadline_elapsed(Instant::now(), deadline).then(|| {
+            err_report(
+                adapter,
+                duration,
+                stage,
+                "BlueZ preflight/registration exceeded the 30-second setup deadline; no signed request was activated",
+            )
+        })
+    }
+
+    fn setup_deadline_elapsed(now: Instant, deadline: Instant) -> bool {
+        now >= deadline
+    }
+
     pub fn serve(
         adapter: &str,
         duration: u16,
         terminate: Arc<AtomicBool>,
     ) -> Result<ExperimentReport, ExperimentError> {
+        serve_inner(adapter, duration, terminate, None)
+    }
+
+    pub fn serve_auth(
+        adapter: &str,
+        duration: u16,
+        terminate: Arc<AtomicBool>,
+        config: AuthTransportConfig,
+    ) -> Result<AuthExperimentReport, ExperimentError> {
+        let auth_transport =
+            Arc::new(AuthTransportState::new(config).map_err(|error| {
+                err_report(adapter, duration, "signed_request_preflight", error)
+            })?);
+        let transport = serve_inner(adapter, duration, terminate, Some(auth_transport.clone()))?;
+        Ok(AuthExperimentReport {
+            transport,
+            research_decision: auth_transport.decision(),
+            host_public_key_fingerprint_sha256: auth_transport.host_fingerprint().to_owned(),
+            watch_public_key_fingerprint_sha256: auth_transport.watch_fingerprint().to_owned(),
+            enrollment_expires_at_unix_ms: auth_transport.enrollment_expires_at_unix_ms,
+            authorization: "never_evaluated",
+        })
+    }
+
+    fn serve_inner(
+        adapter: &str,
+        duration: u16,
+        terminate: Arc<AtomicBool>,
+        auth_transport: Option<Arc<AuthTransportState>>,
+    ) -> Result<ExperimentReport, ExperimentError> {
+        let setup_deadline = Instant::now() + BLUEZ_SETUP_TIMEOUT;
         let connection = zbus::blocking::connection::Builder::system()
-            .and_then(|builder| builder.method_timeout(Duration::from_secs(2)).build())
+            .and_then(|builder| builder.method_timeout(BLUEZ_METHOD_TIMEOUT).build())
             .map_err(|error| {
                 err_report(
                     adapter,
@@ -1201,6 +2106,9 @@ mod linux {
                     format!("system D-Bus unavailable: {error}"),
                 )
             })?;
+        if let Some(error) = setup_deadline_error(adapter, duration, "preflight", setup_deadline) {
+            return Err(error);
+        }
         let owner = bluez_owner(&connection).map_err(|error| {
             err_report(
                 adapter,
@@ -1209,6 +2117,9 @@ mod linux {
                 format!("BlueZ owner unavailable: {error}"),
             )
         })?;
+        if let Some(error) = setup_deadline_error(adapter, duration, "preflight", setup_deadline) {
+            return Err(error);
+        }
         let adapter_path = format!("/org/bluez/{adapter}");
         let nonce = random_bytes::<8>().map_err(|error| {
             err_report(
@@ -1226,10 +2137,16 @@ mod linux {
         let app_path = format!("/org/opencontinuity/gatt_{token}");
         let ad_path = format!("/org/opencontinuity/advertisement_{token}");
         let service_path = format!("{app_path}/service0");
-        let state = Arc::new(GattState::default());
+        let state = Arc::new(match auth_transport {
+            Some(auth_transport) => GattState::with_auth_transport(auth_transport),
+            None => GattState::default(),
+        });
         let monitor =
             SignalMonitor::start(&connection, &owner, &adapter_path, &app_path, state.clone())
                 .map_err(|error| err_report(adapter, duration, "preflight", error))?;
+        if let Some(error) = setup_deadline_error(adapter, duration, "preflight", setup_deadline) {
+            return Err(error);
+        }
         let current_owner = bluez_owner(&connection).map_err(|error| {
             err_report(
                 adapter,
@@ -1254,10 +2171,16 @@ mod linux {
                 format!("BlueZ discovery {}: {error}", classify_dbus_error(&error)),
             )
         })?;
+        if let Some(error) = setup_deadline_error(adapter, duration, "preflight", setup_deadline) {
+            return Err(error);
+        }
         monitor
             .gate
             .healthy()
             .map_err(|error| err_report(adapter, duration, "preflight", error))?;
+        if let Some(error) = setup_deadline_error(adapter, duration, "preflight", setup_deadline) {
+            return Err(error);
+        }
         if !objects
             .contains_key(&ObjectPath::try_from(adapter_path.as_str()).expect("valid adapter path"))
         {
@@ -1295,38 +2218,81 @@ mod linux {
         let supported_instances = manager_capability(&objects, &adapter_path, "SupportedInstances");
         let active_instances = manager_capability(&objects, &adapter_path, "ActiveInstances");
 
-        let specs = [
+        let (service_uuid, local_name, specs) = if state.auth_transport.is_some() {
             (
-                "char0",
-                VERSION_UUID,
-                vec!["read".to_owned()],
-                CharacteristicKind::Version,
-            ),
+                AUTH_SERVICE_UUID,
+                "OC Auth Research",
+                vec![
+                    (
+                        "char0",
+                        AUTH_REQUEST_DATA_UUID,
+                        vec!["read".to_owned()],
+                        CharacteristicKind::AuthRequestData,
+                    ),
+                    (
+                        "char1",
+                        AUTH_REQUEST_CONTROL_UUID,
+                        vec!["write".to_owned()],
+                        CharacteristicKind::AuthRequestControl,
+                    ),
+                    (
+                        "char2",
+                        AUTH_RESPONSE_DATA_UUID,
+                        vec!["write".to_owned()],
+                        CharacteristicKind::AuthResponseData,
+                    ),
+                    (
+                        "char3",
+                        AUTH_RESPONSE_CONTROL_UUID,
+                        vec!["write".to_owned()],
+                        CharacteristicKind::AuthResponseControl,
+                    ),
+                    (
+                        "char4",
+                        AUTH_STATUS_UUID,
+                        vec!["read".to_owned()],
+                        CharacteristicKind::AuthStatus,
+                    ),
+                ],
+            )
+        } else {
             (
-                "char1",
-                CHALLENGE_UUID,
-                vec!["read".to_owned()],
-                CharacteristicKind::Challenge,
-            ),
-            (
-                "char2",
-                EXCHANGE_UUID,
-                vec!["write".to_owned()],
-                CharacteristicKind::Exchange,
-            ),
-            (
-                "char3",
-                RESPONSE_UUID,
-                vec!["read".to_owned()],
-                CharacteristicKind::Response,
-            ),
-            (
-                "char4",
-                CONTROL_UUID,
-                vec!["write".to_owned()],
-                CharacteristicKind::Control,
-            ),
-        ];
+                SERVICE_UUID,
+                "OC Research",
+                vec![
+                    (
+                        "char0",
+                        VERSION_UUID,
+                        vec!["read".to_owned()],
+                        CharacteristicKind::Version,
+                    ),
+                    (
+                        "char1",
+                        CHALLENGE_UUID,
+                        vec!["read".to_owned()],
+                        CharacteristicKind::Challenge,
+                    ),
+                    (
+                        "char2",
+                        EXCHANGE_UUID,
+                        vec!["write".to_owned()],
+                        CharacteristicKind::Exchange,
+                    ),
+                    (
+                        "char3",
+                        RESPONSE_UUID,
+                        vec!["read".to_owned()],
+                        CharacteristicKind::Response,
+                    ),
+                    (
+                        "char4",
+                        CONTROL_UUID,
+                        vec!["write".to_owned()],
+                        CharacteristicKind::Control,
+                    ),
+                ],
+            )
+        };
         let char_paths = specs
             .iter()
             .map(|(name, _, _, _)| format!("{service_path}/{name}"))
@@ -1350,6 +2316,7 @@ mod linux {
             .at(
                 OwnedObjectPath::try_from(service_path.as_str()).expect("valid service path"),
                 GattService {
+                    uuid: service_uuid.to_owned(),
                     characteristics: char_paths.clone(),
                 },
             )
@@ -1388,7 +2355,10 @@ mod linux {
             .object_server()
             .at(
                 OwnedObjectPath::try_from(ad_path.as_str()).expect("valid advertisement path"),
-                LeAdvertisement,
+                LeAdvertisement {
+                    service_uuid: service_uuid.to_owned(),
+                    local_name: local_name.to_owned(),
+                },
             )
             .map_err(|error| {
                 err_report(
@@ -1428,6 +2398,11 @@ mod linux {
             .gate
             .healthy()
             .map_err(|error| err_report(adapter, duration, "preflight", error))?;
+        if let Some(error) =
+            setup_deadline_error(adapter, duration, "registering_application", setup_deadline)
+        {
+            return Err(error);
+        }
         if let Err(error) = manager.call::<_, _, ()>("RegisterApplication", &(app_object, options))
         {
             // A timed-out call may have registered despite its missing reply.
@@ -1449,6 +2424,14 @@ mod linux {
             return Err(failure);
         }
         registration.app_registered = true;
+        if let Some(mut failure) =
+            setup_deadline_error(adapter, duration, "registering_application", setup_deadline)
+        {
+            failure.report.application_registration_succeeded = true;
+            failure.report.application_registered = registration.app_registered;
+            failure.report.cleanup_errors = registration.cleanup();
+            return Err(failure);
+        }
         if let Err(error) = monitor.gate.healthy() {
             let cleanup = registration.cleanup();
             let mut failure = err_report(
@@ -1491,8 +2474,40 @@ mod linux {
             return Err(failure);
         }
         registration.ad_registered = true;
+        if let Some(mut failure) = setup_deadline_error(
+            adapter,
+            duration,
+            "registering_advertisement",
+            setup_deadline,
+        ) {
+            failure.report.application_registration_succeeded = true;
+            failure.report.advertisement_registration_succeeded = true;
+            failure.report.application_registered = registration.app_registered;
+            failure.report.advertisement_registered = registration.ad_registered;
+            failure.report.cleanup_errors = registration.cleanup();
+            return Err(failure);
+        }
 
         let start = Instant::now();
+        if let Some(auth) = &state.auth_transport {
+            if let Err(error) = auth.activate(start) {
+                let cleanup_errors = registration.cleanup();
+                let mut failure = err_report(
+                    adapter,
+                    duration,
+                    "initializing_signed_request",
+                    format!(
+                        "authenticated research did not become ready: {error}; no fallback request was emitted"
+                    ),
+                );
+                failure.report.application_registration_succeeded = true;
+                failure.report.advertisement_registration_succeeded = true;
+                failure.report.application_registered = registration.app_registered;
+                failure.report.advertisement_registered = registration.ad_registered;
+                failure.report.cleanup_errors = cleanup_errors;
+                return Err(failure);
+            }
+        }
         let deadline = start + Duration::from_secs(duration as u64);
         let mut last_probe = Instant::now();
         let active_result: Result<&'static str, ExperimentError> = (|| loop {
@@ -1506,6 +2521,20 @@ mod linux {
             })?;
             if terminate.load(std::sync::atomic::Ordering::Relaxed) {
                 break Ok("termination_signal");
+            }
+            if state
+                .auth_transport
+                .as_ref()
+                .is_some_and(|auth| auth.decision().is_some())
+            {
+                break Ok("research_exchange_complete");
+            }
+            if let Some(reason) = state
+                .auth_transport
+                .as_ref()
+                .and_then(|auth| auth.deadline_shutdown_reason())
+            {
+                break Ok(reason);
             }
             if Instant::now() >= deadline {
                 break Ok("timeout");
@@ -1594,6 +2623,14 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use opencontinuity_core::{
+            watch_auth_research::{
+                ConsentResult, EnrollmentState, HostAuthRequest, KeyAlgorithm, ManualDecision,
+                create_watch_response,
+            },
+            watch_auth_transport::{encode_frames as encode_auth_frames, encode_request_command},
+        };
+        use p256::{FieldBytes, ecdsa::SigningKey};
 
         #[test]
         fn dbus_errors_keep_policy_denial_distinct_from_missing_service() {
@@ -1614,6 +2651,934 @@ mod linux {
             assert_eq!(
                 classify_error_text("org.freedesktop.DBus.Error.NoReply"),
                 "dbus_error"
+            );
+        }
+
+        #[test]
+        fn setup_readiness_deadline_is_bounded_and_includes_the_exact_boundary() {
+            let started = Instant::now();
+            let deadline = started + BLUEZ_SETUP_TIMEOUT;
+            assert!(!setup_deadline_elapsed(
+                started + BLUEZ_SETUP_TIMEOUT - Duration::from_millis(1),
+                deadline
+            ));
+            assert!(setup_deadline_elapsed(deadline, deadline));
+            assert!(setup_deadline_elapsed(
+                deadline + Duration::from_millis(1),
+                deadline
+            ));
+        }
+
+        #[test]
+        fn response_transfer_gets_its_own_window_after_consent_and_stays_inside_signed_expiry() {
+            let request_complete = Instant::now();
+            let consent_deadline = request_complete + WAITING_FOR_CONSENT_TIMEOUT;
+            let response_started = consent_deadline - Duration::from_millis(1);
+            let signed_deadline = response_started + Duration::from_secs(40);
+
+            assert!(consent_deadline_elapsed(
+                Some(consent_deadline),
+                false,
+                consent_deadline
+            ));
+            assert!(!consent_deadline_elapsed(
+                Some(consent_deadline),
+                true,
+                consent_deadline + Duration::from_secs(1)
+            ));
+            assert_eq!(
+                response_transfer_timeout(response_started, signed_deadline),
+                RESPONSE_TRANSFER_TIMEOUT
+            );
+
+            let response_started_near_signed_expiry = signed_deadline - Duration::from_secs(3);
+            assert_eq!(
+                response_transfer_timeout(response_started_near_signed_expiry, signed_deadline),
+                Duration::from_secs(3)
+            );
+        }
+
+        fn test_key(scalar: u8) -> SigningKey {
+            SigningKey::from_bytes(&FieldBytes::from([scalar; 32])).unwrap()
+        }
+
+        fn test_key_hex(key: &SigningKey) -> String {
+            use std::fmt::Write as _;
+
+            let mut encoded = String::with_capacity(130);
+            for byte in key.verifying_key().to_encoded_point(false).as_bytes() {
+                write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+            }
+            encoded
+        }
+
+        fn auth_state() -> (
+            AuthTransportState,
+            SignedEnvelope,
+            VerifiedHostRequest,
+            HostEnrollment,
+            WatchEnrollment,
+            SigningKey,
+        ) {
+            let host_key = test_key(1);
+            let watch_key = test_key(2);
+            let host = HostEnrollment {
+                enrollment_id: "host-enrollment-p009-test".into(),
+                host_identity: "linux-p009-test".into(),
+                linux_uid: 1000,
+                public_key_sec1_hex: test_key_hex(&host_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let watch = WatchEnrollment {
+                enrollment_id: "watch-enrollment-p009-test".into(),
+                watch_identity: "watch-p009-test".into(),
+                bound_host_enrollment_id: host.enrollment_id.clone(),
+                bound_host_identity: host.host_identity.clone(),
+                bound_linux_uid: host.linux_uid,
+                public_key_sec1_hex: test_key_hex(&watch_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let now_ms = unix_now_ms().unwrap();
+            let state = AuthTransportState::new(AuthTransportConfig {
+                host_signing_key: host_key.clone(),
+                host_enrollment: host.clone(),
+                watch_enrollment: watch.clone(),
+                enrollment_expires_at_unix_ms: now_ms + 3_600_000,
+            })
+            .unwrap();
+            let ready_at = Instant::now();
+            state.activate(ready_at).unwrap();
+            let envelope = state
+                .inner
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .envelope
+                .as_ref()
+                .unwrap()
+                .clone();
+            let request = HostAuthRequest::parse_canonical(envelope.canonical()).unwrap();
+            let verified = verify_host_request(
+                Some(&host),
+                request,
+                envelope.signature(),
+                &watch.enrollment_id,
+                unix_now_ms().unwrap(),
+                &mut ReplayGuard::default(),
+            )
+            .unwrap();
+            (state, envelope, verified, host, watch, watch_key)
+        }
+
+        #[test]
+        fn signed_request_waits_for_readiness_and_restart_generates_fresh_request_material() {
+            let host_key = test_key(11);
+            let watch_key = test_key(12);
+            let host = HostEnrollment {
+                enrollment_id: "host-p009a-test".into(),
+                host_identity: "linux-p009a-test".into(),
+                linux_uid: 1000,
+                public_key_sec1_hex: test_key_hex(&host_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let watch = WatchEnrollment {
+                enrollment_id: "watch-p009a-test".into(),
+                watch_identity: "watch-research-p009a".into(),
+                bound_host_enrollment_id: host.enrollment_id.clone(),
+                bound_host_identity: host.host_identity.clone(),
+                bound_linux_uid: host.linux_uid,
+                public_key_sec1_hex: test_key_hex(&watch_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let initial_wall = unix_now_ms().unwrap();
+            let config = || AuthTransportConfig {
+                host_signing_key: host_key.clone(),
+                host_enrollment: host.clone(),
+                watch_enrollment: watch.clone(),
+                enrollment_expires_at_unix_ms: initial_wall + 3_600_000,
+            };
+            let first = AuthTransportState::new(config()).unwrap();
+            assert!(first.inner.lock().unwrap().is_none());
+            assert!(
+                first
+                    .read(
+                        "/org/bluez/hci0/dev_01",
+                        CharacteristicKind::AuthStatus,
+                        0,
+                        23
+                    )
+                    .is_err()
+            );
+
+            let setup_started = Instant::now();
+            let ready_at = setup_started + Duration::from_secs(120);
+            let readiness_wall = initial_wall + 120_000;
+            first.activate_at(ready_at, readiness_wall).unwrap();
+            let first_guard = first.inner.lock().unwrap();
+            let first_session = first_guard.as_ref().unwrap();
+            let first_envelope = first_session.envelope.as_ref().unwrap();
+            let first_request =
+                HostAuthRequest::parse_canonical(first_envelope.canonical()).unwrap();
+            assert_eq!(first_request.issued_at_ms, readiness_wall);
+            assert_eq!(first_request.expires_at_ms, readiness_wall + 60_000);
+            assert_eq!(
+                first_session.signed_deadline,
+                ready_at + Duration::from_secs(60)
+            );
+            drop(first_guard);
+
+            let second = AuthTransportState::new(config()).unwrap();
+            second
+                .activate_at(ready_at + Duration::from_secs(1), readiness_wall + 1_000)
+                .unwrap();
+            let second_guard = second.inner.lock().unwrap();
+            let second_request = HostAuthRequest::parse_canonical(
+                second_guard
+                    .as_ref()
+                    .unwrap()
+                    .envelope
+                    .as_ref()
+                    .unwrap()
+                    .canonical(),
+            )
+            .unwrap();
+            assert_ne!(first_request.session_id, second_request.session_id);
+            assert_ne!(first_request.nonce, second_request.nonce);
+        }
+
+        #[test]
+        fn signed_request_expiry_is_clamped_to_the_test_enrollment_expiry() {
+            let host_key = test_key(31);
+            let watch_key = test_key(32);
+            let host = HostEnrollment {
+                enrollment_id: "host-p009a-short-pin".into(),
+                host_identity: "linux-p009a-short-pin".into(),
+                linux_uid: 1000,
+                public_key_sec1_hex: test_key_hex(&host_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let watch = WatchEnrollment {
+                enrollment_id: "watch-p009a-short-pin".into(),
+                watch_identity: "watch-p009a-short-pin".into(),
+                bound_host_enrollment_id: host.enrollment_id.clone(),
+                bound_host_identity: host.host_identity.clone(),
+                bound_linux_uid: host.linux_uid,
+                public_key_sec1_hex: test_key_hex(&watch_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let initial_wall = unix_now_ms().unwrap();
+            let enrollment_expiry = initial_wall + 5_000;
+            let state = AuthTransportState::new(AuthTransportConfig {
+                host_signing_key: host_key,
+                host_enrollment: host,
+                watch_enrollment: watch,
+                enrollment_expires_at_unix_ms: enrollment_expiry,
+            })
+            .unwrap();
+            let ready_at = Instant::now();
+            let ready_wall = initial_wall + 1_000;
+            state.activate_at(ready_at, ready_wall).unwrap();
+
+            let guard = state.inner.lock().unwrap();
+            let session = guard.as_ref().unwrap();
+            let request =
+                HostAuthRequest::parse_canonical(session.envelope.as_ref().unwrap().canonical())
+                    .unwrap();
+            assert_eq!(request.expires_at_ms, enrollment_expiry);
+            assert_eq!(session.signed_deadline, ready_at + Duration::from_secs(4));
+        }
+
+        #[test]
+        fn expired_or_mismatched_test_enrollment_fails_before_request_initialization() {
+            let host_key = test_key(21);
+            let watch_key = test_key(22);
+            let host = HostEnrollment {
+                enrollment_id: "host-p009a-expiry".into(),
+                host_identity: "linux-p009a-expiry".into(),
+                linux_uid: 1000,
+                public_key_sec1_hex: test_key_hex(&host_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let watch = WatchEnrollment {
+                enrollment_id: "watch-p009a-expiry".into(),
+                watch_identity: "watch-research-expiry".into(),
+                bound_host_enrollment_id: host.enrollment_id.clone(),
+                bound_host_identity: host.host_identity.clone(),
+                bound_linux_uid: host.linux_uid,
+                public_key_sec1_hex: test_key_hex(&watch_key),
+                key_algorithm: KeyAlgorithm::P256EcdsaSha256,
+                key_version: 1,
+                state: EnrollmentState::Active,
+                test_only: true,
+            };
+            let now_ms = unix_now_ms().unwrap();
+            let expired = AuthTransportState::new(AuthTransportConfig {
+                host_signing_key: host_key.clone(),
+                host_enrollment: host.clone(),
+                watch_enrollment: watch.clone(),
+                enrollment_expires_at_unix_ms: now_ms + 1,
+            })
+            .unwrap();
+            assert!(expired.activate_at(Instant::now(), now_ms + 1).is_err());
+            assert!(expired.inner.lock().unwrap().is_none());
+
+            let overlong = AuthTransportState::new(AuthTransportConfig {
+                host_signing_key: host_key.clone(),
+                host_enrollment: host.clone(),
+                watch_enrollment: watch.clone(),
+                enrollment_expires_at_unix_ms: now_ms + MAX_TEST_ENROLLMENT_LIFETIME_MS + 1,
+            });
+            assert!(overlong.is_err());
+
+            let mismatched = AuthTransportState::new(AuthTransportConfig {
+                host_signing_key: test_key(23),
+                host_enrollment: host,
+                watch_enrollment: watch,
+                enrollment_expires_at_unix_ms: now_ms + 3_600_000,
+            });
+            assert!(mismatched.is_err());
+        }
+
+        fn status_transfer_id(state: &AuthTransportState, owner: &str) -> [u8; 8] {
+            state
+                .read(owner, CharacteristicKind::AuthStatus, 0, 23)
+                .unwrap()[3..11]
+                .try_into()
+                .unwrap()
+        }
+
+        fn command(id: [u8; 8], command: RequestCommand) -> Vec<u8> {
+            encode_request_command(id, command)
+        }
+
+        fn deliver_request(
+            state: &AuthTransportState,
+            envelope: &SignedEnvelope,
+            owner: &str,
+            id: [u8; 8],
+        ) {
+            let frames = encode_auth_frames(AuthDirection::HostToWatch, id, envelope, 23).unwrap();
+            for (index, expected) in frames.iter().enumerate() {
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Get { index: index as u8 }),
+                        23,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    state
+                        .read(owner, CharacteristicKind::AuthRequestData, 0, 23)
+                        .unwrap(),
+                    *expected
+                );
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Ack { index: index as u8 }),
+                        23,
+                    )
+                    .unwrap();
+            }
+            state
+                .write(
+                    owner,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Complete),
+                    23,
+                )
+                .unwrap();
+        }
+
+        #[test]
+        fn authenticated_gatt_request_delivery_is_explicit_owner_bound_and_single_client() {
+            let (state, envelope, _, _, _, _) = auth_state();
+            let first = "/org/bluez/hci0/dev_01";
+            let second = "/org/bluez/hci0/dev_02";
+            let status = state
+                .read(first, CharacteristicKind::AuthStatus, 0, 23)
+                .unwrap();
+            assert_eq!(&status[..3], b"OA\x01");
+            assert_eq!(
+                u16::from_le_bytes([status[11], status[12]]) as usize,
+                envelope.as_bytes().len()
+            );
+            assert!(
+                state
+                    .read(second, CharacteristicKind::AuthStatus, 0, 23)
+                    .is_err()
+            );
+            let id: [u8; 8] = status[3..11].try_into().unwrap();
+            let frames = encode_auth_frames(AuthDirection::HostToWatch, id, &envelope, 23).unwrap();
+            for (index, expected) in frames.iter().enumerate() {
+                state
+                    .write(
+                        first,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Get { index: index as u8 }),
+                        23,
+                    )
+                    .unwrap();
+                let read = state
+                    .read(first, CharacteristicKind::AuthRequestData, 0, 23)
+                    .unwrap();
+                assert_eq!(&read, expected);
+                assert_eq!(
+                    state
+                        .read(first, CharacteristicKind::AuthRequestData, 0, 23)
+                        .unwrap(),
+                    read
+                );
+                state
+                    .write(
+                        first,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Ack { index: index as u8 }),
+                        23,
+                    )
+                    .unwrap();
+                assert!(
+                    state
+                        .read(first, CharacteristicKind::AuthRequestData, 0, 23)
+                        .is_err()
+                );
+            }
+            state
+                .write(
+                    first,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Complete),
+                    23,
+                )
+                .unwrap();
+            assert!(
+                state
+                    .write(
+                        second,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Complete),
+                        23,
+                    )
+                    .is_err()
+            );
+            state.invalidate(first);
+            assert!(
+                state
+                    .read(second, CharacteristicKind::AuthStatus, 0, 23)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn authenticated_gatt_verifies_signed_denial_and_rejects_duplicate_completion() {
+            let (state, request_envelope, verified, host, watch, watch_key) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            let request_frames =
+                encode_auth_frames(AuthDirection::HostToWatch, id, &request_envelope, 23).unwrap();
+            for (index, _) in request_frames.iter().enumerate() {
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Get { index: index as u8 }),
+                        23,
+                    )
+                    .unwrap();
+                state
+                    .read(owner, CharacteristicKind::AuthRequestData, 0, 23)
+                    .unwrap();
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Ack { index: index as u8 }),
+                        23,
+                    )
+                    .unwrap();
+            }
+            state
+                .write(
+                    owner,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Complete),
+                    23,
+                )
+                .unwrap();
+            let signed = create_watch_response(
+                verified,
+                &watch,
+                &watch_key,
+                ManualDecision::Reject,
+                ConsentResult::ExplicitUserDecision,
+                unix_now_ms().unwrap(),
+            )
+            .unwrap();
+            let response = SignedEnvelope::new(
+                AuthDirection::WatchToHost,
+                &signed.response.canonical_bytes().unwrap(),
+                &signed.signature_raw,
+            )
+            .unwrap();
+            let response_frames =
+                encode_auth_frames(AuthDirection::WatchToHost, id, &response, 23).unwrap();
+            for frame in response_frames {
+                state
+                    .write(owner, CharacteristicKind::AuthResponseData, &frame, 23)
+                    .unwrap();
+            }
+            let completion = command(id, RequestCommand::Complete);
+            state
+                .write(
+                    owner,
+                    CharacteristicKind::AuthResponseControl,
+                    &completion,
+                    23,
+                )
+                .unwrap();
+            assert_eq!(state.decision(), Some("rejected"));
+            assert!(
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthResponseControl,
+                        &completion,
+                        23
+                    )
+                    .is_err()
+            );
+            assert_eq!(state.host_enrollment.enrollment_id, host.enrollment_id);
+            assert_eq!(state.watch_enrollment.enrollment_id, watch.enrollment_id);
+        }
+
+        #[test]
+        fn authenticated_gatt_cancel_timeout_and_wrong_owner_invalidate_the_session() {
+            let (state, _, _, _, _, _) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            let other = "/org/bluez/hci0/dev_02";
+            assert_eq!(
+                state
+                    .write(
+                        other,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Cancel),
+                        23
+                    )
+                    .unwrap_err()
+                    .to_string(),
+                "org.bluez.Error.NotPermitted: another client owns this research session"
+            );
+            state
+                .write(
+                    owner,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Cancel),
+                    23,
+                )
+                .unwrap();
+            assert!(
+                state
+                    .read(owner, CharacteristicKind::AuthStatus, 0, 23)
+                    .is_err()
+            );
+
+            let (expired, _, _, _, _, _) = auth_state();
+            let mut guard = expired.inner.lock().unwrap();
+            let inner = guard.as_mut().unwrap();
+            inner.signed_deadline = Instant::now() - Duration::from_millis(1);
+            drop(guard);
+            assert!(
+                expired
+                    .read(owner, CharacteristicKind::AuthStatus, 0, 23)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn request_inactivity_timeout_is_polled_without_another_ble_callback() {
+            let (state, _, _, _, _, _) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let _ = status_transfer_id(&state, owner);
+            let claimed_at = Instant::now();
+            let claimed_wall_ms = unix_now_ms().unwrap();
+
+            assert_eq!(
+                state.deadline_shutdown_reason_at(
+                    claimed_at + BLE_INACTIVITY_TIMEOUT + Duration::from_millis(1),
+                    Some(claimed_wall_ms + 8_001),
+                ),
+                Some("ble_inactivity_timeout")
+            );
+        }
+
+        #[test]
+        fn signed_request_expiring_during_consent_retires_before_response_transfer() {
+            let (state, request, _, _, _, _) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            deliver_request(&state, &request, owner, id);
+
+            {
+                let mut guard = state.inner.lock().unwrap();
+                let inner = guard.as_mut().unwrap();
+                inner.signed_deadline = Instant::now() - Duration::from_millis(1);
+                inner.expires_at_ms = unix_now_ms().unwrap();
+            }
+
+            assert_eq!(
+                state.deadline_shutdown_reason(),
+                Some("signed_request_expired")
+            );
+            assert_eq!(state.decision(), None);
+            assert!(
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthResponseData,
+                        &[b'O', b'A', 1],
+                        23
+                    )
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn response_started_before_consent_deadline_finishes_in_its_own_transfer_window() {
+            let (state, request, verified, _, watch, watch_key) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            deliver_request(&state, &request, owner, id);
+
+            let wall_now = unix_now_ms().unwrap();
+            let response_started_at = Instant::now() + Duration::from_secs(1);
+            let response_started_wall_ms = wall_now + 1_000;
+            let consent_deadline = response_started_at + Duration::from_millis(20);
+            {
+                let mut guard = state.inner.lock().unwrap();
+                guard.as_mut().unwrap().consent_deadline = Some(consent_deadline);
+            }
+
+            let signed = create_watch_response(
+                verified,
+                &watch,
+                &watch_key,
+                ManualDecision::Reject,
+                ConsentResult::ExplicitUserDecision,
+                response_started_wall_ms,
+            )
+            .unwrap();
+            let response = SignedEnvelope::new(
+                AuthDirection::WatchToHost,
+                &signed.response.canonical_bytes().unwrap(),
+                &signed.signature_raw,
+            )
+            .unwrap();
+            let response_frames =
+                encode_auth_frames(AuthDirection::WatchToHost, id, &response, 23).unwrap();
+            state
+                .write_at(
+                    owner,
+                    CharacteristicKind::AuthResponseData,
+                    &response_frames[0],
+                    23,
+                    response_started_at,
+                    response_started_wall_ms,
+                )
+                .unwrap();
+            assert!(
+                state
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .consent_deadline
+                    .is_none()
+            );
+
+            let after_consent_deadline = consent_deadline + Duration::from_millis(1);
+            let after_consent_wall_ms = response_started_wall_ms + 21;
+            for frame in response_frames.iter().skip(1) {
+                state
+                    .write_at(
+                        owner,
+                        CharacteristicKind::AuthResponseData,
+                        frame,
+                        23,
+                        after_consent_deadline,
+                        after_consent_wall_ms,
+                    )
+                    .unwrap();
+            }
+            state
+                .write_at(
+                    owner,
+                    CharacteristicKind::AuthResponseControl,
+                    &command(id, RequestCommand::Complete),
+                    23,
+                    after_consent_deadline,
+                    after_consent_wall_ms,
+                )
+                .unwrap();
+            assert_eq!(state.decision(), Some("rejected"));
+        }
+
+        #[test]
+        fn response_transfer_timeout_is_polled_without_another_ble_callback() {
+            let (state, request, verified, _, watch, watch_key) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            deliver_request(&state, &request, owner, id);
+
+            let now_ms = unix_now_ms().unwrap();
+            let signed = create_watch_response(
+                verified,
+                &watch,
+                &watch_key,
+                ManualDecision::Reject,
+                ConsentResult::ExplicitUserDecision,
+                now_ms,
+            )
+            .unwrap();
+            let response = SignedEnvelope::new(
+                AuthDirection::WatchToHost,
+                &signed.response.canonical_bytes().unwrap(),
+                &signed.signature_raw,
+            )
+            .unwrap();
+            let first_frame = encode_auth_frames(AuthDirection::WatchToHost, id, &response, 23)
+                .unwrap()
+                .remove(0);
+            state
+                .write(
+                    owner,
+                    CharacteristicKind::AuthResponseData,
+                    &first_frame,
+                    23,
+                )
+                .unwrap();
+
+            assert_eq!(
+                state.deadline_shutdown_reason_at(
+                    Instant::now() + RESPONSE_TRANSFER_TIMEOUT + Duration::from_millis(1),
+                    Some(now_ms + 15_001),
+                ),
+                Some("response_transfer_timeout")
+            );
+        }
+
+        #[test]
+        fn authenticated_gatt_cancel_is_terminal_before_delivery_after_delivery_and_mid_response() {
+            let owner = "/org/bluez/hci0/dev_01";
+            let (before_delivery, _, _, _, _, _) = auth_state();
+            let id = status_transfer_id(&before_delivery, owner);
+            before_delivery
+                .write(
+                    owner,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Cancel),
+                    23,
+                )
+                .unwrap();
+            assert_eq!(
+                before_delivery.deadline_shutdown_reason(),
+                Some("watch_cancelled")
+            );
+
+            let (during_delivery, _, _, _, _, _) = auth_state();
+            let id = status_transfer_id(&during_delivery, owner);
+            during_delivery
+                .write(
+                    owner,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Get { index: 0 }),
+                    23,
+                )
+                .unwrap();
+            during_delivery
+                .read(owner, CharacteristicKind::AuthRequestData, 0, 23)
+                .unwrap();
+            during_delivery
+                .write(
+                    owner,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Cancel),
+                    23,
+                )
+                .unwrap();
+            assert_eq!(
+                during_delivery.deadline_shutdown_reason(),
+                Some("watch_cancelled")
+            );
+
+            let (after_delivery, request, _, _, _, _) = auth_state();
+            let id = status_transfer_id(&after_delivery, owner);
+            deliver_request(&after_delivery, &request, owner, id);
+            after_delivery
+                .write(
+                    owner,
+                    CharacteristicKind::AuthResponseControl,
+                    &command(id, RequestCommand::Cancel),
+                    23,
+                )
+                .unwrap();
+            assert_eq!(
+                after_delivery.deadline_shutdown_reason(),
+                Some("watch_cancelled")
+            );
+
+            let (mid_response, request, verified, host, watch, watch_key) = auth_state();
+            let id = status_transfer_id(&mid_response, owner);
+            deliver_request(&mid_response, &request, owner, id);
+            let signed = create_watch_response(
+                verified,
+                &watch,
+                &watch_key,
+                ManualDecision::Reject,
+                ConsentResult::ExplicitUserDecision,
+                unix_now_ms().unwrap(),
+            )
+            .unwrap();
+            let response = SignedEnvelope::new(
+                AuthDirection::WatchToHost,
+                &signed.response.canonical_bytes().unwrap(),
+                &signed.signature_raw,
+            )
+            .unwrap();
+            let first_frame = encode_auth_frames(AuthDirection::WatchToHost, id, &response, 23)
+                .unwrap()
+                .remove(0);
+            mid_response
+                .write(
+                    owner,
+                    CharacteristicKind::AuthResponseData,
+                    &first_frame,
+                    23,
+                )
+                .unwrap();
+            mid_response
+                .write(
+                    owner,
+                    CharacteristicKind::AuthResponseControl,
+                    &command(id, RequestCommand::Cancel),
+                    23,
+                )
+                .unwrap();
+            assert_eq!(
+                mid_response.deadline_shutdown_reason(),
+                Some("watch_cancelled")
+            );
+            assert_eq!(mid_response.decision(), None);
+            assert_eq!(host.enrollment_id, "host-enrollment-p009-test");
+        }
+
+        #[test]
+        fn connection_loss_during_request_get_read_ack_retires_the_owner() {
+            let (state, _, _, _, _, _) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            state
+                .write(
+                    owner,
+                    CharacteristicKind::AuthRequestControl,
+                    &command(id, RequestCommand::Get { index: 0 }),
+                    23,
+                )
+                .unwrap();
+            state
+                .read(owner, CharacteristicKind::AuthRequestData, 0, 23)
+                .unwrap();
+            state.invalidate(owner);
+            assert_eq!(state.deadline_shutdown_reason(), Some("connection_lost"));
+            assert!(
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthRequestControl,
+                        &command(id, RequestCommand::Ack { index: 0 }),
+                        23,
+                    )
+                    .is_err()
+            );
+            assert!(
+                state
+                    .read(
+                        "/org/bluez/hci0/dev_02",
+                        CharacteristicKind::AuthStatus,
+                        0,
+                        23
+                    )
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn authenticated_gatt_retires_a_complete_response_with_a_bad_signature() {
+            let (state, request_envelope, verified, _host, watch, watch_key) = auth_state();
+            let owner = "/org/bluez/hci0/dev_01";
+            let id = status_transfer_id(&state, owner);
+            deliver_request(&state, &request_envelope, owner, id);
+            let signed = create_watch_response(
+                verified,
+                &watch,
+                &watch_key,
+                ManualDecision::Reject,
+                ConsentResult::ExplicitUserDecision,
+                unix_now_ms().unwrap(),
+            )
+            .unwrap();
+            let bad_signature = [0x99; 64];
+            let response = SignedEnvelope::new(
+                AuthDirection::WatchToHost,
+                &signed.response.canonical_bytes().unwrap(),
+                &bad_signature,
+            )
+            .unwrap();
+            let frames = encode_auth_frames(AuthDirection::WatchToHost, id, &response, 23).unwrap();
+            for frame in frames {
+                state
+                    .write(owner, CharacteristicKind::AuthResponseData, &frame, 23)
+                    .unwrap();
+            }
+            assert!(
+                state
+                    .write(
+                        owner,
+                        CharacteristicKind::AuthResponseControl,
+                        &command(id, RequestCommand::Complete),
+                        23
+                    )
+                    .is_err()
+            );
+            assert_eq!(state.decision(), None);
+            assert_eq!(
+                state.deadline_shutdown_reason(),
+                Some("response_verification_failed")
             );
         }
 
@@ -1865,7 +3830,7 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::serve;
+pub use linux::{serve, serve_auth};
 
 #[cfg(not(target_os = "linux"))]
 pub fn serve(
@@ -1890,6 +3855,35 @@ pub fn serve(
             active_advertising_instances: None,
             error_class: Some("unsupported_platform"),
             error: Some("experimental BlueZ GATT transport is Linux-only".into()),
+            authorization: "never_evaluated",
+        }),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn serve_auth(
+    adapter: &str,
+    duration: u16,
+    _terminate: Arc<AtomicBool>,
+    _config: AuthTransportConfig,
+) -> Result<AuthExperimentReport, ExperimentError> {
+    Err(ExperimentError {
+        report: Box::new(ExperimentReport {
+            status: "failed",
+            stage: "preflight",
+            adapter: adapter.into(),
+            runtime_seconds: duration,
+            shutdown_reason: None,
+            application_registered: false,
+            advertisement_registered: false,
+            application_registration_succeeded: false,
+            advertisement_registration_succeeded: false,
+            cleanup_errors: Vec::new(),
+            controller_le_peripheral_capability: "unknown",
+            supported_advertising_instances: None,
+            active_advertising_instances: None,
+            error_class: Some("unsupported_platform"),
+            error: Some("authenticated research GATT transport is Linux-only".into()),
             authorization: "never_evaluated",
         }),
     })
