@@ -37,3 +37,12 @@ States describe the P009 provisional branch build. `unsupported` means no implem
 | Qt 6/QML Settings UI | unsupported | P001 Settings framework remains absent; a GATT research command does not complete the UI. |
 
 Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No native Apple protocol or production authentication feature is implemented.
+
+## P010 physical qualification (provisional)
+
+Bounded opt-in timing diagnostics, strict evidence manifests and unsigned development
+build artifacts support physical qualification. Physical Watch/Arch BLE, signed
+exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
+workspace. Simulation and CI do not establish hardware compatibility. Both research
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization
+or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).

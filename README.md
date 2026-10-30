@@ -53,3 +53,12 @@ P008 adds Rust P-256 request/response verification, CryptoKit-compatible Swift t
 ### P007B physical BLE qualification infrastructure
 
 P007B provides a [sanitized read-only BlueZ preflight](scripts/qualify-p007b-host.py), [signed Watch installation guide](docs/research/P007B_APPLE_SIGNED_INSTALL.md), [physical BLE runbook](docs/research/P007B_REAL_BLE_RUNBOOK.md), and [validation](docs/P007B_VALIDATION.md). The Watch synthetic transport UI offers a disabled-by-default, bounded (64 event), allowlisted metadata trace, erased when disabled. The P007B software infrastructure has been merged; actual controller RF, Watch SE 2 long reads and physical exchanges remain **NOT RUN**. This is not Apple Watch identity verification or Linux authorization.
+
+## P010 physical qualification (provisional)
+
+Bounded opt-in timing diagnostics, strict evidence manifests and unsigned development
+build artifacts support physical qualification. Physical Watch/Arch BLE, signed
+exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
+workspace. Simulation and CI do not establish hardware compatibility. Both research
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization
+or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](docs/P010_VALIDATION.md).

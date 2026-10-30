@@ -57,3 +57,12 @@ Enrollment pins are not authenticated out-of-band, keys are not stored persisten
 P009 adds separate versioned framing and portable transfer state. Size, sequence, transfer ID, direction, exact length, explicit completion, owner substitution and timeout checks are exercised in Rust tests; the Swift counterpart tests the same frame contract and GET/read/ACK cursor. An isolated BlueZ service binds one client to one signed request and invalidates it on disconnect, owner change or timeout. The Watch CoreBluetooth manager reads one selected request frame per acknowledged GET/read/ACK cycle, verifies the pinned host signature before showing consent, and sends sequential response writes with response. CI carries actual serialized Rust request frames through Swift reassembly and CryptoKit verification, then returns Swift-signed response frames to Rust/P008 verification. These controls cover source and software fixtures only. They do not establish Apple SDK build success, BlueZ runtime behavior or RF interoperability.
 
 Transfer IDs and ACKs are not authenticated identity. P008 signatures and independent enrollment records authenticate only test keys; they do not prove proximity or genuine Watch hardware. Replay state remains in memory. P009A supplies a manual, test-only fingerprint ceremony and in-memory ephemeral Watch signing key; physical transport and LocalAuthentication evidence remain unverified. See [P009A enrollment](research/P009A_TEMPORARY_ENROLLMENT.md), [deadline model](research/P009A_DEADLINE_MODEL.md), [security review](research/P009A_SECURITY_REVIEW.md), and [transport threat review](research/P009_TRANSPORT_THREAT_REVIEW.md). Reports must retain `authorization: never_evaluated`.
+
+## P010 physical qualification (provisional)
+
+Bounded opt-in timing diagnostics, strict evidence manifests and unsigned development
+build artifacts support physical qualification. Physical Watch/Arch BLE, signed
+exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
+workspace. Simulation and CI do not establish hardware compatibility. Both research
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization
+or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).

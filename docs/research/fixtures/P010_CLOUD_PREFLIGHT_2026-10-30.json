@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "authorization": "never_evaluated",
+  "timestamp_utc": "2026-10-30T06:24:27.069415+00:00",
+  "source": "host_preflight",
+  "selected_adapter": null,
+  "distribution": "debian",
+  "kernel_release": "6.18.57",
+  "machine": "x86_64",
+  "probes": {
+    "kernel_inventory": {
+      "status": "PASS",
+      "exit_code": 0
+    },
+    "bluez_cli_version": {
+      "status": "BLOCKED",
+      "reason": "command_unavailable"
+    },
+    "controller_list": {
+      "status": "BLOCKED",
+      "reason": "command_unavailable"
+    },
+    "bluetooth_service": {
+      "status": "FAIL",
+      "exit_code": 1
+    },
+    "management_info": {
+      "status": "BLOCKED",
+      "reason": "command_unavailable"
+    },
+    "bluez_dbus_tree": {
+      "status": "FAIL",
+      "exit_code": 1
+    },
+    "selected_adapter": {
+      "status": "BLOCKED",
+      "reason": "adapter_not_selected"
+    },
+    "powered": {
+      "status": "BLOCKED",
+      "reason": "adapter_not_selected"
+    },
+    "gatt_manager": {
+      "status": "BLOCKED",
+      "reason": "adapter_not_selected"
+    },
+    "advertising_manager": {
+      "status": "BLOCKED",
+      "reason": "adapter_not_selected"
+    },
+    "supported_instances": {
+      "status": "BLOCKED",
+      "reason": "adapter_not_selected"
+    },
+    "active_instances": {
+      "status": "BLOCKED",
+      "reason": "adapter_not_selected"
+    },
+    "system_dbus": {
+      "status": "FAIL",
+      "exit_code": 1
+    },
+    "firmware_and_le_support": {
+      "status": "NOT RUN",
+      "reason": "requires_private_operator_inspection_or_approved_trial"
+    },
+    "application_registration_permission": {
+      "status": "NOT RUN",
+      "reason": "requires_private_operator_inspection_or_approved_trial"
+    },
+    "advertisement_registration_permission": {
+      "status": "NOT RUN",
+      "reason": "requires_private_operator_inspection_or_approved_trial"
+    },
+    "existing_host_qualification": {
+      "status": "PASS",
+      "exit_code": 0
+    }
+  },
+  "interpretation": "command_results_only_not_hardware_qualification",
+  "physical_trial": "NOT RUN",
+  "raw_output": "discarded_identifiers_not_published"
+}

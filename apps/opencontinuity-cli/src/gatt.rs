@@ -81,6 +81,7 @@ pub fn validate_options(adapter: &str, duration: u16, experimental: bool) -> Res
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use crate::qualification_diagnostics::{Stage as DiagnosticStage, Trace as DiagnosticTrace};
     use futures_lite::{FutureExt, StreamExt};
     use opencontinuity_core::gatt_wire::{
         ControlCommand, FrameAssembler, FrameProgress, MAX_ATT_MTU, MIN_ATT_MTU, WIRE_VERSION,
@@ -2095,6 +2096,9 @@ mod linux {
         terminate: Arc<AtomicBool>,
         auth_transport: Option<Arc<AuthTransportState>>,
     ) -> Result<ExperimentReport, ExperimentError> {
+        let mut diagnostics =
+            DiagnosticTrace::new(std::env::var("OC_P010_DIAGNOSTICS").as_deref() == Ok("1"));
+        let diagnostic_started = Instant::now();
         let setup_deadline = Instant::now() + BLUEZ_SETUP_TIMEOUT;
         let connection = zbus::blocking::connection::Builder::system()
             .and_then(|builder| builder.method_timeout(BLUEZ_METHOD_TIMEOUT).build())
@@ -2423,6 +2427,11 @@ mod linux {
             failure.report.application_registered = registration.app_registered;
             return Err(failure);
         }
+        diagnostics.record(
+            DiagnosticStage::ApplicationRegistration,
+            diagnostic_started,
+            true,
+        );
         registration.app_registered = true;
         if let Some(mut failure) =
             setup_deadline_error(adapter, duration, "registering_application", setup_deadline)
@@ -2473,6 +2482,11 @@ mod linux {
             failure.report.cleanup_errors = cleanup;
             return Err(failure);
         }
+        diagnostics.record(
+            DiagnosticStage::AdvertisementRegistration,
+            diagnostic_started,
+            true,
+        );
         registration.ad_registered = true;
         if let Some(mut failure) = setup_deadline_error(
             adapter,
@@ -2578,8 +2592,19 @@ mod linux {
             }
             thread::sleep(Duration::from_millis(100));
         })();
+        diagnostics.record(
+            DiagnosticStage::ServerLifetime,
+            start,
+            active_result.is_ok(),
+        );
+        let cleanup_started = Instant::now();
         let elapsed = start.elapsed().as_secs().min(u16::MAX as u64) as u16;
         let cleanup_errors = registration.cleanup();
+        diagnostics.record(
+            DiagnosticStage::Cleanup,
+            cleanup_started,
+            cleanup_errors.is_empty(),
+        );
         if let Err(mut failure) = active_result {
             failure.report.application_registration_succeeded = true;
             failure.report.advertisement_registration_succeeded = true;

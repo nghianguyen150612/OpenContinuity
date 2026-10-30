@@ -12,6 +12,41 @@ final class GattDiagnosticsTests: XCTestCase {
         trace.setEnabled(false)
         XCTAssertTrue(trace.events.isEmpty)
     }
+    func testSharedRustSimulatedTimingVector() throws {
+        let url = Bundle.module.url(forResource: "p010-diagnostic-vector", withExtension: "json", subdirectory: "Fixtures")!
+        let vector = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var trace = GattDiagnostics()
+        trace.setEnabled(true)
+        trace.begin(.cleanup, now: (vector["start_ms"] as! NSNumber).uint64Value)
+        trace.measure(.cleanup, now: (vector["finish_ms"] as! NSNumber).uint64Value,
+                      wall: (vector["wall_ms"] as! NSNumber).uint64Value)
+        XCTAssertEqual(trace.samples[0].elapsedMs, (vector["elapsed_ms"] as! NSNumber).uint64Value)
+        XCTAssertEqual(vector["source"] as? String, "simulated")
+        XCTAssertEqual(vector["authorization"] as? String, "never_evaluated")
+    }
+    func testDeterministicTimingAndBoundedAggregates() throws {
+        var trace = GattDiagnostics()
+        trace.begin(.getReadAck, now: 10)
+        trace.measure(.getReadAck, now: 20, wall: 100)
+        XCTAssertTrue(trace.samples.isEmpty)
+        trace.setEnabled(true)
+        for _ in 0..<218 {
+            trace.begin(.getReadAck, now: 10)
+            trace.measure(.getReadAck, expected: 20, actual: 20, now: 35, wall: 100)
+        }
+        XCTAssertEqual(trace.samples.count, 64)
+        XCTAssertEqual(trace.aggregates["get_read_ack"]?.count, 218)
+        XCTAssertEqual(trace.aggregates["get_read_ack"]?.totalMs, 5450)
+        XCTAssertEqual(trace.aggregates["get_read_ack"]?.maximumMs, 25)
+        XCTAssertEqual(trace.samples.first?.timestampUnixMs, 100)
+        let doc = try JSONSerialization.jsonObject(with: Data(trace.exportJSON().utf8)) as! [String: Any]
+        XCTAssertEqual(doc["source"] as? String, "simulated")
+        XCTAssertEqual(doc["authorization"] as? String, "never_evaluated")
+        XCTAssertEqual(doc["kind"] as? String, "diagnostic_trace")
+        trace.setEnabled(false)
+        XCTAssertTrue(trace.samples.isEmpty)
+        XCTAssertTrue(trace.aggregates.isEmpty)
+    }
     func testTraceBoundAndMetadataClamping() {
         var trace = GattDiagnostics()
         trace.setEnabled(true)
