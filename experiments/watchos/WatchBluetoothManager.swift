@@ -57,7 +57,8 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         #endif
     }
     var diagnosticsEnabled: Bool { diagnostics.enabled }
-    var diagnosticLines: [String] { [GattDiagnostics.authorization] + diagnostics.events + (diagnostics.enabled ? [diagnostics.exportJSON(source: diagnosticSource)] : []) }
+    var diagnosticExport: String { diagnostics.enabled ? diagnostics.exportJSON(source: diagnosticSource) : "" }
+    var diagnosticLines: [String] { [GattDiagnostics.authorization] + diagnostics.events + (diagnostics.enabled ? [diagnosticExport] : []) }
     func setDiagnosticsEnabled(_ enabled: Bool) { diagnostics.setEnabled(enabled) }
 
     private var central: CBCentralManager!

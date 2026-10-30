@@ -42,8 +42,11 @@ struct ContentView: View {
                             .tint(.red)
                     }
 
-                    Toggle("Synthetic BLE Diagnostics", isOn: Binding(get: { bluetooth.diagnosticsEnabled }, set: { bluetooth.setDiagnosticsEnabled($0) }))
+                    Toggle("Research BLE Diagnostics", isOn: Binding(get: { bluetooth.diagnosticsEnabled }, set: { bluetooth.setDiagnosticsEnabled($0) }))
                     if bluetooth.diagnosticsEnabled {
+                        ShareLink(item: bluetooth.diagnosticExport) {
+                            Label("Export sanitized timing JSON", systemImage: "square.and.arrow.up")
+                        }
                         ForEach(Array(bluetooth.diagnosticLines.enumerated()), id: \.offset) { _, line in
                             Text(line).font(.caption2)
                         }
