@@ -93,3 +93,40 @@ jobs:
           name: OpenContinuityWatch-UNSIGNED-development-local-signing-required
           path: ${{ runner.temp }}/OpenContinuityWatch-UNSIGNED-development.zip
           retention-days: 7
+
+  qt-settings:
+    name: Qt Settings (Linux)
+    runs-on: ubuntu-24.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Qt 6 development and QML runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ qt6-base-dev qt6-declarative-dev qt6-svg-dev qt6-qpa-plugins qt6-wayland \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-window qml6-module-qtqml-workerscript qml6-module-qtquick-templates
+      - name: Build read-only CLI
+        run: cargo build --bin opencontinuity
+      - name: Configure Settings
+        run: cmake -S apps/opencontinuity-settings -B build/settings -G Ninja -DCMAKE_BUILD_TYPE=Debug
+      - name: Build Settings and native test peer
+        run: cmake --build build/settings --parallel 2
+      - name: C++ unit tests and real QML window navigation
+        env:
+          OC_REAL_CLI: ${{ github.workspace }}/target/debug/opencontinuity
+        run: ctest --test-dir build/settings --output-on-failure --verbose
+      - name: Install to local prefix
+        run: |
+          cmake --install build/settings --prefix "$RUNNER_TEMP/p011-install"
+          install -m 755 target/debug/opencontinuity "$RUNNER_TEMP/p011-install/bin/opencontinuity"
+          test -f "$RUNNER_TEMP/p011-install/share/applications/opencontinuity-settings.desktop"
+          test -f "$RUNNER_TEMP/p011-install/share/icons/hicolor/scalable/apps/opencontinuity-settings.svg"
+          "$RUNNER_TEMP/p011-install/bin/opencontinuity-settings" --version
+          python3 apps/opencontinuity-settings/tests/launch_smoke.py "$RUNNER_TEMP/p011-install/bin/opencontinuity-settings"
