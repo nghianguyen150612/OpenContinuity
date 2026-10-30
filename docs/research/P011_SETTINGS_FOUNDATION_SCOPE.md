@@ -1,6 +1,6 @@
 # P011 — Native OpenContinuity Settings Foundation (Qt 6/QML, Linux First)
 
-**Status:** STARTED — branch and specification only, implementation NOT STARTED.
+**Status:** IMPLEMENTED — native Qt/QML application, strict read-only bridge, tests, CI and documentation. See [actual validation](../P011_VALIDATION.md); acceptance remains subject to final-head checks.
 **Branch:** `feat/p011-qt6-settings-foundation`
 **Base `main`:** `e3afed25e9d8b8b63896c9117254cc86611855d2` (P010 software infrastructure squash merge).
 **Provenance:** The requested `OpenContinuity-Roadmap-P001-P060.md` was unavailable when the repository was bootstrapped. This P011 is an **explicitly provisional milestone** selected to close the repeatedly documented P001 Settings foundation gap. It is not asserted to match an unseen original P011.

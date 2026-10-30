@@ -31,7 +31,7 @@ Add modules when there is concrete implementation work:
 - `crates/opencontinuity-platform/src/`: OS-facing adapter interfaces
 - `platforms/linux/`: Linux and BlueZ-specific integration
 - `platforms/freebsd/` and `platforms/windows/`: future platform adapters
-- `apps/opencontinuity-settings/`: future Qt 6/QML UI and minimal C++ bridge
+- `apps/opencontinuity-settings/`: implemented P011 Qt 6/QML UI and read-only C++ bridge
 - `tests/fixtures/`: redacted protocol fixtures; no personal secrets or captures
 
 These are planned boundaries, not P001 placeholder crates. Portable domain decisions must not depend on an adapter implementation. Protocol and UI code must report genuine Apple compatibility separately from experiments and custom replacements.
@@ -50,5 +50,16 @@ Bounded opt-in timing diagnostics, strict evidence manifests and unsigned develo
 build artifacts support physical qualification. Physical Watch/Arch BLE, signed
 exchange, LocalAuthentication and cleanup acceptance remain BLOCKED in the cloud
 workspace. Simulation and CI do not establish hardware compatibility. Both research
-wire formats and the 60-second signed bound remain unchanged. No Linux authorization
-or P011 is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+wire formats and the 60-second signed bound remain unchanged. No Linux authorization is implemented; `authorization: never_evaluated`. See [P010 validation](P010_VALIDATION.md).
+
+## P011 native Settings foundation (provisional)
+
+The independent C++20/CMake project in `apps/opencontinuity-settings` embeds a
+Qt Quick Controls/Layout ApplicationWindow, eight pages and original icon. It
+links system Qt 6.4+ and communicates only through an asynchronous bounded
+`QProcess` invocation of a trusted absolute CLI with `doctor --json`. Strict v1
+validation and QAbstractListModel projections preserve the Rust contract. Errors
+and stale reports are explicit; device discovery and protocol actions remain
+absent. There is no Qt/Cargo dependency or Rust core change. Earlier statements
+about an absent Settings framework describe their historical milestone.
+See [P011 architecture](research/P011_SETTINGS_ARCHITECTURE.md).

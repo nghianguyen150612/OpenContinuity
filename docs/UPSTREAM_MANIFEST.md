@@ -39,3 +39,24 @@ On 2026-10-27, the four P002-relevant repositories above were fetched at their a
 | [owly](https://github.com/t4t5/owly/tree/9a676e11d011c34ea32798a2541f2b1eeb66e731) | `9a676e11d011c34ea32798a2541f2b1eeb66e731`, 2026-10-26 | Root MIT; bundled `crates/omdrop-owl/omdrop-awdl/LICENSE` is GPL-2.0-only; README and AirDrop/AWDL sources | Current Rust AirDrop/AWDL project with Linux radio backends; no Watch Auto Unlock path was found in inspected docs/code. Not evidence AWDL is involved in Auto Unlock. Component license must be assessed separately before reuse. No code copied. |
 
 The four repositories' default branch state was clean at the sampled revision; `watch-unlock-rs` and `watch-unlock-linux` had no release tags in the shallow source clone used for inspection. `continuity` is a reverse-engineering documentation/dissector project rather than a supported Watch unlock library. `owly` is in active development but targets AirDrop/AWDL. These maintenance observations can age and are not quality or security endorsements.
+
+## P011 desktop dependencies and original assets
+
+P011 adds no copied upstream application source or Apple assets. The QML/C++ and
+linked-segments SVG under `apps/opencontinuity-settings` are original project
+source under the repository MIT license. Build dependencies are CMake, Ninja and
+a C++20 compiler. Runtime libraries are system Qt 6 Core/Gui/Qml/Quick/
+QuickControls2/Svg and their platform/image/QML plugins; QtTest is test-only.
+Qt is dynamically linked, outside Cargo. Local Debian packages are Qt 6.8.2;
+Ubuntu 24.04 CI uses its 6.4.2 packages. No Qt binary is vendored.
+
+The selected open-source Qt modules are available under LGPL-3.0 / GPL-2.0-or-later /
+GPL-3.0-or-later or commercial terms as applicable; inspect each installed
+module/plugin's exact copyright and license notices. In particular, do not assume
+Qt Quick Controls or SVG assets from third-party applications share this project's
+MIT license. Distribution under LGPL requires the applicable notices/license
+texts, users' ability to replace/relink the Qt libraries, source/modification
+obligations and compliance with other relevant conditions. This source-only CMake
+install does not produce a self-contained licensed binary bundle. Distributors
+must audit the exact system Qt build, plugins and transitive dependencies. No
+GPL-only optional Qt module is intentionally selected here.
