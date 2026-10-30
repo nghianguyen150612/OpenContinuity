@@ -26,7 +26,22 @@ pub const CONSERVATIVE_ATT_VALUE_BYTES: usize = 20;
 pub const CONSERVATIVE_FRAME_PAYLOAD_BYTES: usize =
     CONSERVATIVE_ATT_VALUE_BYTES - FRAME_HEADER_BYTES;
 pub const MAX_FRAME_COUNT: usize = MAX_ENVELOPE_BYTES.div_ceil(CONSERVATIVE_FRAME_PAYLOAD_BYTES);
-pub const TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum wall-independent time to retrieve the signed host request after
+/// the first connected client claims the ready session.
+pub const REQUEST_TRANSFER_TIMEOUT: Duration = Duration::from_secs(20);
+/// Maximum time for a signed response transfer after its first frame.
+pub const RESPONSE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(15);
+/// A stalled BLE transfer also fails after this much inactivity, even when its
+/// absolute phase deadline has more time remaining.
+pub const BLE_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(8);
+/// The Watch must return a response or cancellation within this interval after
+/// the host receives the explicit request-delivery COMPLETE command.
+pub const WAITING_FOR_CONSENT_TIMEOUT: Duration = Duration::from_secs(25);
+/// A ready research session that receives no client is retired after this
+/// interval. Signed P008 expiry remains the outer bound for all phases.
+pub const WAITING_FOR_CLIENT_TIMEOUT: Duration = Duration::from_secs(45);
+/// Compatibility alias for earlier users of the transport helpers.
+pub const TRANSFER_TIMEOUT: Duration = RESPONSE_TRANSFER_TIMEOUT;
 
 const MAGIC: [u8; 2] = *b"OA";
 const FLAG_START: u8 = 0x01;
@@ -55,11 +70,56 @@ pub enum TransportError {
     InvalidEnvelope,
     LengthMismatch,
     TransferExpired,
+    InactivityExpired,
     IncompleteTransfer,
     AlreadyCompleted,
     DuplicateCompletion,
     Cancelled,
     InvalidChunkCommand,
+}
+
+/// A bounded monotonic phase deadline. Activity may move the idle deadline,
+/// but never moves the absolute deadline.
+#[derive(Debug, Clone, Copy)]
+pub struct PhaseDeadline {
+    absolute: Instant,
+    idle_timeout: Option<Duration>,
+    last_activity: Instant,
+}
+
+impl PhaseDeadline {
+    pub fn new(
+        started_at: Instant,
+        absolute_timeout: Duration,
+        idle_timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            absolute: started_at + absolute_timeout,
+            idle_timeout,
+            last_activity: started_at,
+        }
+    }
+
+    pub fn check(&self, now: Instant) -> Result<(), TransportError> {
+        if now >= self.absolute {
+            return Err(TransportError::TransferExpired);
+        }
+        if self
+            .idle_timeout
+            .is_some_and(|timeout| now.saturating_duration_since(self.last_activity) >= timeout)
+        {
+            return Err(TransportError::InactivityExpired);
+        }
+        Ok(())
+    }
+
+    pub fn touch(&mut self, now: Instant) {
+        self.last_activity = now;
+    }
+
+    pub fn absolute(&self) -> Instant {
+        self.absolute
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,7 +254,7 @@ pub struct TransferAssembler {
     total_len: Option<usize>,
     next_sequence: u16,
     bytes: Vec<u8>,
-    created_at: Instant,
+    deadline: PhaseDeadline,
     byte_complete: bool,
     committed: bool,
     cancelled: bool,
@@ -207,6 +267,24 @@ impl TransferAssembler {
         owner: impl Into<String>,
         created_at: Instant,
     ) -> Self {
+        Self::new_with_timeout(
+            transfer_id,
+            direction,
+            owner,
+            created_at,
+            RESPONSE_TRANSFER_TIMEOUT,
+            Some(BLE_INACTIVITY_TIMEOUT),
+        )
+    }
+
+    pub fn new_with_timeout(
+        transfer_id: [u8; 8],
+        direction: Direction,
+        owner: impl Into<String>,
+        started_at: Instant,
+        absolute_timeout: Duration,
+        idle_timeout: Option<Duration>,
+    ) -> Self {
         Self {
             transfer_id,
             direction,
@@ -214,7 +292,7 @@ impl TransferAssembler {
             total_len: None,
             next_sequence: 0,
             bytes: Vec::new(),
-            created_at,
+            deadline: PhaseDeadline::new(started_at, absolute_timeout, idle_timeout),
             byte_complete: false,
             committed: false,
             cancelled: false,
@@ -303,6 +381,7 @@ impl TransferAssembler {
             SignedEnvelope::from_bytes(direction, &self.bytes)?;
             self.byte_complete = true;
         }
+        self.deadline.touch(now);
         Ok(())
     }
 
@@ -363,10 +442,7 @@ impl TransferAssembler {
         if self.committed {
             return Err(TransportError::AlreadyCompleted);
         }
-        if now.saturating_duration_since(self.created_at) > TRANSFER_TIMEOUT {
-            return Err(TransportError::TransferExpired);
-        }
-        Ok(())
+        self.deadline.check(now)
     }
 }
 
@@ -380,7 +456,7 @@ pub struct RequestChunkMailbox {
     frames: Vec<Vec<u8>>,
     expected_index: usize,
     requested_index: Option<usize>,
-    started_at: Instant,
+    deadline: PhaseDeadline,
     completed: bool,
     cancelled: bool,
 }
@@ -393,13 +469,33 @@ impl RequestChunkMailbox {
         att_mtu: usize,
         now: Instant,
     ) -> Result<Self, TransportError> {
+        Self::new_with_timeout(
+            transfer_id,
+            owner,
+            envelope,
+            att_mtu,
+            now,
+            REQUEST_TRANSFER_TIMEOUT,
+            Some(BLE_INACTIVITY_TIMEOUT),
+        )
+    }
+
+    pub fn new_with_timeout(
+        transfer_id: [u8; 8],
+        owner: impl Into<String>,
+        envelope: &SignedEnvelope,
+        att_mtu: usize,
+        started_at: Instant,
+        absolute_timeout: Duration,
+        idle_timeout: Option<Duration>,
+    ) -> Result<Self, TransportError> {
         Ok(Self {
             transfer_id,
             owner: owner.into(),
             frames: encode_frames(Direction::HostToWatch, transfer_id, envelope, att_mtu)?,
             expected_index: 0,
             requested_index: None,
-            started_at: now,
+            deadline: PhaseDeadline::new(started_at, absolute_timeout, idle_timeout),
             completed: false,
             cancelled: false,
         })
@@ -423,6 +519,7 @@ impl RequestChunkMailbox {
             return Err(TransportError::DuplicateOrOutOfOrder);
         }
         self.requested_index = Some(index);
+        self.deadline.touch(now);
         Ok(&self.frames[index])
     }
 
@@ -439,6 +536,7 @@ impl RequestChunkMailbox {
         }
         self.expected_index += 1;
         self.requested_index = None;
+        self.deadline.touch(now);
         Ok(())
     }
 
@@ -456,6 +554,7 @@ impl RequestChunkMailbox {
             return Err(TransportError::IncompleteTransfer);
         }
         self.completed = true;
+        self.deadline.touch(now);
         Ok(())
     }
 
@@ -478,6 +577,15 @@ impl RequestChunkMailbox {
         self.expected_index
     }
 
+    pub fn validate_live(
+        &self,
+        owner: &str,
+        transfer_id: [u8; 8],
+        now: Instant,
+    ) -> Result<(), TransportError> {
+        self.check(owner, transfer_id, now)
+    }
+
     fn check(&self, owner: &str, transfer_id: [u8; 8], now: Instant) -> Result<(), TransportError> {
         if owner != self.owner {
             return Err(TransportError::OwnerMismatch);
@@ -491,10 +599,7 @@ impl RequestChunkMailbox {
         if self.completed {
             return Err(TransportError::AlreadyCompleted);
         }
-        if now.saturating_duration_since(self.started_at) > TRANSFER_TIMEOUT {
-            return Err(TransportError::TransferExpired);
-        }
-        Ok(())
+        self.deadline.check(now)
     }
 }
 
@@ -758,6 +863,84 @@ mod tests {
                 now
             ),
             Err(TransportError::MessageTooLarge)
+        );
+    }
+
+    #[test]
+    fn monotonic_phase_deadlines_bound_idle_and_long_active_transfers() {
+        let start = Instant::now();
+        let mut deadline = PhaseDeadline::new(
+            start,
+            REQUEST_TRANSFER_TIMEOUT,
+            Some(BLE_INACTIVITY_TIMEOUT),
+        );
+        assert_eq!(deadline.check(start + Duration::from_secs(7)), Ok(()));
+        deadline.touch(start + Duration::from_secs(7));
+        assert_eq!(deadline.check(start + Duration::from_secs(14)), Ok(()));
+        deadline.touch(start + Duration::from_secs(14));
+        assert_eq!(
+            deadline.check(start + Duration::from_secs(20)),
+            Err(TransportError::TransferExpired)
+        );
+
+        let idle = PhaseDeadline::new(
+            start,
+            REQUEST_TRANSFER_TIMEOUT,
+            Some(BLE_INACTIVITY_TIMEOUT),
+        );
+        assert_eq!(
+            idle.check(start + BLE_INACTIVITY_TIMEOUT),
+            Err(TransportError::InactivityExpired)
+        );
+    }
+
+    #[test]
+    fn response_transfer_started_late_gets_its_own_bounded_window() {
+        let signed = envelope(Direction::WatchToHost);
+        let frames =
+            encode_frames(Direction::WatchToHost, TRANSFER_ID, &signed, MIN_ATT_MTU).unwrap();
+        let ready = Instant::now();
+        let response_start = ready + WAITING_FOR_CONSENT_TIMEOUT - Duration::from_millis(1);
+        let mut assembler = TransferAssembler::new_with_timeout(
+            TRANSFER_ID,
+            Direction::WatchToHost,
+            OWNER,
+            response_start,
+            RESPONSE_TRANSFER_TIMEOUT,
+            Some(BLE_INACTIVITY_TIMEOUT),
+        );
+        let mut now = response_start;
+        for frame in &frames {
+            assembler
+                .push(OWNER, Direction::WatchToHost, frame, MIN_ATT_MTU, now)
+                .unwrap();
+            now += Duration::from_millis(1);
+        }
+        assert_eq!(assembler.complete(OWNER, TRANSFER_ID, now).unwrap(), signed);
+    }
+
+    #[test]
+    fn request_get_ack_progress_cannot_extend_the_absolute_transfer_deadline() {
+        let signed = envelope(Direction::HostToWatch);
+        let start = Instant::now();
+        let mut mailbox = RequestChunkMailbox::new_with_timeout(
+            TRANSFER_ID,
+            OWNER,
+            &signed,
+            MIN_ATT_MTU,
+            start,
+            REQUEST_TRANSFER_TIMEOUT,
+            Some(BLE_INACTIVITY_TIMEOUT),
+        )
+        .unwrap();
+        for index in 0..2 {
+            let at = start + Duration::from_secs(7 * (index as u64 + 1));
+            mailbox.get(OWNER, TRANSFER_ID, index, at).unwrap();
+            mailbox.acknowledge(OWNER, TRANSFER_ID, index, at).unwrap();
+        }
+        assert_eq!(
+            mailbox.get(OWNER, TRANSFER_ID, 2, start + REQUEST_TRANSFER_TIMEOUT),
+            Err(TransportError::TransferExpired)
         );
     }
 

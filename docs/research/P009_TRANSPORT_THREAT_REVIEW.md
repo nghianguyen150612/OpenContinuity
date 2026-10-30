@@ -19,12 +19,15 @@ P009 transports P008 research messages without changing their canonical signed b
 | Disconnect, cancellation or callback restart | The Rust server and CoreBluetooth manager invalidate owner-bound state on disconnect, cancellation, timeout, owner restart, or app suspension. Connection delegate generations reject stale callbacks. |
 | Replay | P008 in-memory replay guards validate nonce/session on both endpoints. They are bounded and do not survive process restart. |
 | Forged peer / wrong key | P008 independently pinned enrollment and P-256 signature validation; advertised BLE keys are never used. |
+| Setup delay consuming request freshness | No P008 request is signed until bounded 30-second BlueZ readiness and both registrations succeed; each D-Bus method call is capped at 2 seconds. |
+| Delayed consent consuming response-transfer time | Host request, consent wait and response transfer have independent monotonic deadlines, all clamped to signed P008 expiry. |
+| Unverified test enrollment | Both peers display and require explicit manually verified SHA-256 pins; Linux `serve` requires exact host and Watch fingerprint flags before D-Bus setup. |
 
 ## Remaining attacks and limits
 
 - The Rust and Swift software tests do not establish RF interoperability, real BlueZ behavior, CoreBluetooth callback ordering, Watch long-read behavior, or on-device LocalAuthentication policy support.
-- BlueZ and CoreBluetooth P009 runtime source is wired, but there is no Apple SDK build or radio trial yet. Software integration does not establish actual BLE callback behavior or RF interoperability.
-- There is no reviewed, persistent enrollment store or safe live test-key provisioning path. Test private keys remain test-only.
+- The temporary test-enrollment workflow is implemented, but manual fingerprint exchange remains dependent on operator procedure. This is not a production enrollment ceremony or persistent trust store.
+- Apple SDK build and physical radio validation must be checked separately. Software integration does not establish actual BLE callback behavior or RF interoperability.
 - In-memory replay protection resets on process restart. An attacker able to restart either app can present a previously valid message within its lifetime unless a new nonce/session is issued and old state is otherwise controlled.
 - An attacker can relay genuine signed research traffic between endpoints. Transfer IDs and signatures do not prove distance or proximity.
 - Nearby peers can still deny service through connection attempts, radio interference, disconnects, or BlueZ resource pressure. The server limits this service to one owner and uses P006A fail-closed disconnect handling, but it cannot prevent RF interference or all resource-exhaustion attempts.
@@ -33,4 +36,4 @@ P009 transports P008 research messages without changing their canonical signed b
 
 ## Review conclusion
 
-Portable framing and Rust/Swift cryptographic fixture integration are suitable for software review once CI passes. Keep the live signed-approval path blocked until reviewed test-key injection and enrollment, Apple build, and hardware gates close. No physical or production trust claim is supported. `authorization: never_evaluated` is mandatory for every result.
+Portable framing, deadline enforcement, temporary test enrollment and Rust/Swift cryptographic fixture integration are suitable for software review once the current CI passes. Keep physical signed approval claims blocked until Apple build and hardware gates close. No physical or production trust claim is supported. `authorization: never_evaluated` is mandatory for every result.

@@ -75,7 +75,7 @@ struct ResearchConsentView: View {
 
     private func approveAfterLocalAuthentication() {
         guard !completed else { return }
-        guard currentMilliseconds <= verifiedRequest.request.expiresAtMilliseconds else {
+        guard currentMilliseconds < verifiedRequest.request.expiresAtMilliseconds else {
             finish(.failure(.expired))
             return
         }
@@ -116,7 +116,7 @@ struct ResearchConsentView: View {
 
     private func recordManualRejection() {
         guard !completed else { return }
-        guard currentMilliseconds <= verifiedRequest.request.expiresAtMilliseconds else {
+        guard currentMilliseconds < verifiedRequest.request.expiresAtMilliseconds else {
             finish(.failure(.expired))
             return
         }
@@ -125,7 +125,7 @@ struct ResearchConsentView: View {
 
     private func signManualDecision(_ decision: WatchAuthDecision) {
         let timestamp = currentMilliseconds
-        guard timestamp <= verifiedRequest.request.expiresAtMilliseconds else {
+        guard timestamp < verifiedRequest.request.expiresAtMilliseconds else {
             status = "The request expired. No response was signed."
             finish(.failure(.expired))
             return

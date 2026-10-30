@@ -2,9 +2,9 @@ use opencontinuity_core::{
     DoctorReport,
     research::{MockDiscoveryAdapter, ResearchFixture, read_only_report},
     watch_auth_research::{
-        EnrollmentState, HostAuthRequest, HostEnrollment, ReplayGuard, SignedHostRequest,
-        WatchAuthFixture, WatchAuthResponse, WatchEnrollment, build_host_request, verify_fixture,
-        verify_host_request, verify_watch_response,
+        EnrollmentState, HostAuthRequest, HostEnrollment, ReplayGuard, WatchAuthFixture,
+        WatchAuthResponse, WatchEnrollment, verify_fixture, verify_host_request,
+        verify_watch_response,
     },
     watch_auth_transport::{
         Direction as AuthTransportDirection, SignedEnvelope, TransferAssembler,
@@ -14,6 +14,7 @@ use opencontinuity_core::{
 };
 use p256::ecdsa::SigningKey;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     env, fs,
     io::Read,
@@ -32,7 +33,10 @@ const HELP: &str = concat!(
     "       opencontinuity research watch-auth --fixture <path> [--json]\n",
     "       opencontinuity research watch-auth-transport prepare --fixture <path> --output <path>\n",
     "       opencontinuity research watch-auth-transport verify-response --fixture <path> --input <path> [--json]\n",
-    "       opencontinuity research watch-auth-gatt serve --adapter hci0 --duration-seconds 60 --enrollments <path> --host-key-file <path> --experimental [--json]\n",
+    "       opencontinuity research watch-auth-gatt serve --adapter hci0 --duration-seconds 60 --enrollments <path> --host-key-file <path> --confirm-host-sha256 <64-lowercase-hex> --confirm-watch-sha256 <64-lowercase-hex> --experimental [--json]\n",
+    "       opencontinuity research watch-auth-gatt generate-host-key --host-key-file <new-path> --experimental [--json]\n",
+    "       opencontinuity research watch-auth-gatt export-host-pin --host-enrollment-id <id> --host-identity <id> --linux-uid <uid> --host-key-file <path> --experimental [--json]\n",
+    "       opencontinuity research watch-auth-gatt check-enrollment --enrollments <path> --host-key-file <path> --experimental [--json]\n",
     "       opencontinuity research watch-ble --capabilities [--json]\n",
     "       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\n",
     "Commands:\n",
@@ -448,11 +452,28 @@ fn run_watch_auth_research(args: &[String]) -> ExitCode {
 #[serde(deny_unknown_fields)]
 struct P009EnrollmentPins {
     schema_version: u8,
+    expires_at_unix_ms: u64,
     host_enrollment: HostEnrollment,
     watch_enrollment: WatchEnrollment,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct P009HostPinDocument {
+    schema_version: u8,
+    expires_at_unix_ms: u64,
+    host_enrollment: HostEnrollment,
+    host_fingerprint_sha256: String,
+}
+
 fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
+    match args.get(1).map(String::as_str) {
+        Some("export-host-pin") => return run_export_host_pin(args),
+        Some("check-enrollment") => return run_check_enrollment(args),
+        Some("generate-host-key") => return run_generate_host_key(args),
+        Some("serve") => {}
+        _ => return usage_error(),
+    }
     if args.get(1).map(String::as_str) != Some("serve") {
         return usage_error();
     }
@@ -460,6 +481,8 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
     let mut duration = None;
     let mut enrollment_path = None;
     let mut host_key_path = None;
+    let mut confirmed_host_fingerprint = None;
+    let mut confirmed_watch_fingerprint = None;
     let mut experimental = false;
     let mut json_output = false;
     let mut index = 2;
@@ -484,6 +507,18 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
                 host_key_path = Some(args[index + 1].clone());
                 index += 2;
             }
+            "--confirm-host-sha256"
+                if index + 1 < args.len() && confirmed_host_fingerprint.is_none() =>
+            {
+                confirmed_host_fingerprint = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--confirm-watch-sha256"
+                if index + 1 < args.len() && confirmed_watch_fingerprint.is_none() =>
+            {
+                confirmed_watch_fingerprint = Some(args[index + 1].clone());
+                index += 2;
+            }
             "--experimental" if !experimental => {
                 experimental = true;
                 index += 1;
@@ -495,18 +530,35 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
             _ => return usage_error(),
         }
     }
-    let (Some(adapter), Some(duration), Some(enrollment_path), Some(host_key_path)) =
-        (adapter, duration, enrollment_path, host_key_path)
+    let (
+        Some(adapter),
+        Some(duration),
+        Some(enrollment_path),
+        Some(host_key_path),
+        Some(confirmed_host_fingerprint),
+        Some(confirmed_watch_fingerprint),
+    ) = (
+        adapter,
+        duration,
+        enrollment_path,
+        host_key_path,
+        confirmed_host_fingerprint,
+        confirmed_watch_fingerprint,
+    )
     else {
+        eprintln!(
+            "P009A serve requires exact host and Watch SHA-256 fingerprint confirmations from an independently verified exchange"
+        );
         return usage_error();
     };
     if let Err(error) = gatt::validate_options(&adapter, duration, experimental) {
         eprintln!("{error}");
         return ExitCode::from(2);
     }
-    if duration > 60 {
+    if duration > gatt::MAX_AUTH_RUNTIME_SECONDS {
         eprintln!(
-            "authenticated research runtime must not exceed the 60-second P008 request lifetime"
+            "authenticated research runtime must not exceed the {}-second P008 request lifetime",
+            gatt::MAX_AUTH_RUNTIME_SECONDS
         );
         return ExitCode::from(2);
     }
@@ -520,6 +572,51 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let host_public = config
+        .host_signing_key
+        .verifying_key()
+        .to_encoded_point(false);
+    let host_fingerprint = hex_digest(&Sha256::digest(host_public.as_bytes()));
+    let watch_public = decode_hex(&config.watch_enrollment.public_key_sec1_hex)
+        .expect("enrollment validation checked Watch public-key encoding");
+    let watch_fingerprint = hex_digest(&Sha256::digest(watch_public));
+    if let Err(error) =
+        validate_fingerprint_confirmation("host", &confirmed_host_fingerprint, &host_fingerprint)
+            .and_then(|()| {
+                validate_fingerprint_confirmation(
+                    "Watch",
+                    &confirmed_watch_fingerprint,
+                    &watch_fingerprint,
+                )
+            })
+    {
+        eprintln!(
+            "P009A enrollment fingerprint confirmation failed: {error}; no BlueZ service was started and no request was signed"
+        );
+        return ExitCode::from(2);
+    }
+    if !json_output {
+        println!(
+            "P009A test_only enrollment; verify both fingerprints out of band before starting."
+        );
+        println!("  host SHA-256: {}", format_fingerprint(&host_fingerprint));
+        println!(
+            "  Watch SHA-256: {}",
+            format_fingerprint(&watch_fingerprint)
+        );
+        println!(
+            "  enrollment expires at Unix ms: {}",
+            config.enrollment_expires_at_unix_ms
+        );
+        println!(
+            "  host identity / Linux UID: {} / {}",
+            config.host_enrollment.host_identity, config.host_enrollment.linux_uid
+        );
+        println!(
+            "  Watch enrollment: {}",
+            config.watch_enrollment.enrollment_id
+        );
+    }
     let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Err(error) =
         signal_hook::flag::register(signal_hook::consts::SIGTERM, interrupted.clone())
@@ -546,6 +643,14 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
                 println!("  adapter: {}", report.transport.adapter);
                 println!("  runtime: {} seconds", report.transport.runtime_seconds);
                 println!("  request/response protocol: OC-WATCH-AUTH-TRANSPORT/1");
+                println!(
+                    "  host SHA-256: {}",
+                    format_fingerprint(&report.host_public_key_fingerprint_sha256)
+                );
+                println!(
+                    "  Watch SHA-256: {}",
+                    format_fingerprint(&report.watch_public_key_fingerprint_sha256)
+                );
                 match report.research_decision {
                     Some(decision) => println!("  signed research decision: {decision}"),
                     None => println!("  signed research decision: not received"),
@@ -573,6 +678,433 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
     }
 }
 
+#[derive(Serialize)]
+struct P009GeneratedHostKeyReport {
+    status: &'static str,
+    test_only: bool,
+    host_key_file: String,
+    host_fingerprint_sha256: String,
+    authorization: &'static str,
+}
+
+fn run_generate_host_key(args: &[String]) -> ExitCode {
+    let mut host_key_path = None;
+    let mut experimental = false;
+    let mut json_output = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--host-key-file" if index + 1 < args.len() && host_key_path.is_none() => {
+                host_key_path = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--experimental" if !experimental => {
+                experimental = true;
+                index += 1;
+            }
+            "--json" if !json_output => {
+                json_output = true;
+                index += 1;
+            }
+            _ => return usage_error(),
+        }
+    }
+    let Some(host_key_path) = host_key_path else {
+        return usage_error();
+    };
+    if !experimental {
+        eprintln!("test host-key generation requires explicit --experimental opt-in");
+        return ExitCode::from(2);
+    }
+    match create_test_host_key_file(&host_key_path) {
+        Ok(fingerprint) => {
+            let report = P009GeneratedHostKeyReport {
+                status: "created_test_only_host_key",
+                test_only: true,
+                host_key_file: host_key_path,
+                host_fingerprint_sha256: fingerprint,
+                authorization: "never_evaluated",
+            };
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).expect("report serializes")
+                );
+            } else {
+                println!("Created a temporary test_only P-256 host signing key.");
+                println!(
+                    "  file: {} (mode 0600; private scalar not printed)",
+                    report.host_key_file
+                );
+                println!(
+                    "  SHA-256: {}",
+                    format_fingerprint(&report.host_fingerprint_sha256)
+                );
+                println!("  authorization: never evaluated");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("could not create test host key: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn create_test_host_key_file(path: &str) -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
+
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        let mut file = options
+            .open(path)
+            .map_err(|error| format!("cannot create a new mode-0600 file at {path}: {error}"))?;
+        let key = (|| -> Result<SigningKey, String> {
+            for _ in 0..8 {
+                let mut scalar = [0u8; 32];
+                if let Err(error) = getrandom::getrandom(&mut scalar) {
+                    scalar.fill(0);
+                    return Err(format!("OS random source unavailable: {error}"));
+                }
+                let key = SigningKey::from_slice(&scalar).ok();
+                scalar.fill(0);
+                if let Some(key) = key {
+                    return Ok(key);
+                }
+            }
+            Err("OS random source did not produce a valid P-256 scalar".into())
+        })();
+        let key = match key {
+            Ok(key) => key,
+            Err(error) => {
+                drop(file);
+                let _ = fs::remove_file(path);
+                return Err(error);
+            }
+        };
+        let mut encoded_scalar = encode_hex(&key.to_bytes()).into_bytes();
+        let public_key = key.verifying_key().to_encoded_point(false);
+        let fingerprint = hex_digest(&Sha256::digest(public_key.as_bytes()));
+        let write_result = file
+            .write_all(&encoded_scalar)
+            .and_then(|()| file.sync_all());
+        encoded_scalar.fill(0);
+        if let Err(error) = write_result {
+            drop(file);
+            let _ = fs::remove_file(path);
+            return Err(format!("could not finish writing test key file: {error}"));
+        }
+        Ok(fingerprint)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Err("temporary P009A host key generation is supported only on Linux".into())
+    }
+}
+
+#[derive(Serialize)]
+struct P009EnrollmentCheckReport {
+    status: &'static str,
+    host_identity: String,
+    linux_uid: u32,
+    watch_identity: String,
+    host_fingerprint_sha256: String,
+    watch_fingerprint_sha256: String,
+    expires_at_unix_ms: u64,
+    test_only: bool,
+    authorization: &'static str,
+}
+
+fn run_check_enrollment(args: &[String]) -> ExitCode {
+    let mut enrollment_path = None;
+    let mut host_key_path = None;
+    let mut experimental = false;
+    let mut json_output = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--enrollments" if index + 1 < args.len() && enrollment_path.is_none() => {
+                enrollment_path = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--host-key-file" if index + 1 < args.len() && host_key_path.is_none() => {
+                host_key_path = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--experimental" if !experimental => {
+                experimental = true;
+                index += 1;
+            }
+            "--json" if !json_output => {
+                json_output = true;
+                index += 1;
+            }
+            _ => return usage_error(),
+        }
+    }
+    let (Some(enrollment_path), Some(host_key_path)) = (enrollment_path, host_key_path) else {
+        return usage_error();
+    };
+    if !experimental {
+        eprintln!("enrollment check requires explicit --experimental opt-in");
+        return ExitCode::from(2);
+    }
+    match build_auth_transport_config(&enrollment_path, &host_key_path) {
+        Ok(config) => {
+            let host_public = config
+                .host_signing_key
+                .verifying_key()
+                .to_encoded_point(false);
+            let host_fingerprint = hex_digest(&Sha256::digest(host_public.as_bytes()));
+            let watch_key = match decode_hex(&config.watch_enrollment.public_key_sec1_hex) {
+                Ok(key) => key,
+                Err(error) => {
+                    eprintln!("invalid Watch public pin: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let report = P009EnrollmentCheckReport {
+                status: "valid_test_only_enrollment",
+                host_identity: config.host_enrollment.host_identity.clone(),
+                linux_uid: config.host_enrollment.linux_uid,
+                watch_identity: config.watch_enrollment.watch_identity.clone(),
+                host_fingerprint_sha256: host_fingerprint,
+                watch_fingerprint_sha256: hex_digest(&Sha256::digest(watch_key)),
+                expires_at_unix_ms: config.enrollment_expires_at_unix_ms,
+                test_only: true,
+                authorization: "never_evaluated",
+            };
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).expect("report serializes")
+                );
+            } else {
+                println!(
+                    "P009A test enrollment is complete. Verify each fingerprint with the Watch operator before starting."
+                );
+                println!(
+                    "host: {} / Linux UID {}",
+                    report.host_identity, report.linux_uid
+                );
+                println!(
+                    "host SHA-256: {}",
+                    format_fingerprint(&report.host_fingerprint_sha256)
+                );
+                println!("Watch: {}", report.watch_identity);
+                println!(
+                    "Watch SHA-256: {}",
+                    format_fingerprint(&report.watch_fingerprint_sha256)
+                );
+                println!("expires at Unix ms: {}", report.expires_at_unix_ms);
+                println!("confirmation values (64 lowercase hex):");
+                println!("  --confirm-host-sha256 {}", report.host_fingerprint_sha256);
+                println!(
+                    "  --confirm-watch-sha256 {}",
+                    report.watch_fingerprint_sha256
+                );
+                println!("test_only: true; authorization: never evaluated");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("P009A enrollment check failed: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run_export_host_pin(args: &[String]) -> ExitCode {
+    let mut enrollment_id = None;
+    let mut host_identity = None;
+    let mut linux_uid = None;
+    let mut host_key_path = None;
+    let mut experimental = false;
+    let mut json_output = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--host-enrollment-id" if index + 1 < args.len() && enrollment_id.is_none() => {
+                enrollment_id = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--host-identity" if index + 1 < args.len() && host_identity.is_none() => {
+                host_identity = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--linux-uid" if index + 1 < args.len() && linux_uid.is_none() => {
+                linux_uid = args[index + 1].parse::<u32>().ok();
+                if linux_uid.is_none() {
+                    return usage_error();
+                }
+                index += 2;
+            }
+            "--host-key-file" if index + 1 < args.len() && host_key_path.is_none() => {
+                host_key_path = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--experimental" if !experimental => {
+                experimental = true;
+                index += 1;
+            }
+            "--json" if !json_output => {
+                json_output = true;
+                index += 1;
+            }
+            _ => return usage_error(),
+        }
+    }
+    let (Some(enrollment_id), Some(host_identity), Some(linux_uid), Some(host_key_path)) =
+        (enrollment_id, host_identity, linux_uid, host_key_path)
+    else {
+        return usage_error();
+    };
+    if !experimental {
+        eprintln!("host pin export requires explicit --experimental opt-in");
+        return ExitCode::from(2);
+    }
+    let result = (|| -> Result<P009HostPinDocument, String> {
+        validate_research_identifier(&enrollment_id)?;
+        validate_research_identifier(&host_identity)?;
+        if linux_uid != current_linux_uid()? {
+            return Err("--linux-uid must match the effective UID running this command".into());
+        }
+        let signing_key = load_test_host_signing_key(&host_key_path)?;
+        let public_key = signing_key.verifying_key().to_encoded_point(false);
+        let public_key_sec1_hex = encode_hex(public_key.as_bytes());
+        let host_enrollment = HostEnrollment {
+            enrollment_id,
+            host_identity,
+            linux_uid,
+            public_key_sec1_hex,
+            key_algorithm: opencontinuity_core::watch_auth_research::KeyAlgorithm::P256EcdsaSha256,
+            key_version: 1,
+            state: EnrollmentState::Active,
+            test_only: true,
+        };
+        let now_ms = unix_now_ms()?;
+        let expires_at_unix_ms = now_ms
+            .checked_add(3_600_000)
+            .ok_or_else(|| "test host pin expiry overflow".to_owned())?;
+        let fingerprint = hex_digest(&Sha256::digest(public_key.as_bytes()));
+        Ok(P009HostPinDocument {
+            schema_version: 1,
+            expires_at_unix_ms,
+            host_enrollment,
+            host_fingerprint_sha256: fingerprint,
+        })
+    })();
+    match result {
+        Ok(document) => {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&document).expect("host pin serializes")
+                );
+            } else {
+                println!(
+                    "P009A test-only host pin; public data only. Verify this SHA-256 fingerprint through a separate channel before importing it on the Watch."
+                );
+                println!(
+                    "host: {} ({})",
+                    document.host_enrollment.host_identity, document.host_enrollment.enrollment_id
+                );
+                println!("Linux UID: {}", document.host_enrollment.linux_uid);
+                println!(
+                    "SHA-256 fingerprint: {}",
+                    format_fingerprint(&document.host_fingerprint_sha256)
+                );
+                println!("expires at Unix ms: {}", document.expires_at_unix_ms);
+                println!("public host pin JSON follows:");
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&document).expect("host pin serializes")
+                );
+                println!("authorization: never evaluated");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("could not export host pin: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn unix_now_ms() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .map_err(|_| "system clock is before the Unix epoch".to_owned())
+}
+
+fn current_linux_uid() -> Result<u32, String> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: geteuid has no pointer arguments or memory-safety preconditions.
+        Ok(unsafe { libc::geteuid() })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("P009A host enrollment is available only on Linux".into())
+    }
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    encode_hex(bytes)
+}
+
+fn validate_fingerprint_confirmation(
+    key_label: &str,
+    confirmed: &str,
+    expected: &str,
+) -> Result<(), String> {
+    if confirmed.len() != 64
+        || !confirmed
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "{key_label} confirmation must be 64 lowercase hexadecimal characters"
+        ));
+    }
+    if confirmed != expected {
+        return Err(format!(
+            "{key_label} fingerprint does not match the active test enrollment"
+        ));
+    }
+    Ok(())
+}
+
+fn format_fingerprint(hex: &str) -> String {
+    hex.as_bytes()
+        .chunks(4)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or("????"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn validate_research_identifier(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(
+            "research identity must be 1–128 ASCII letters, digits, '.', '_', ':' or '-'".into(),
+        );
+    }
+    Ok(())
+}
+
 fn build_auth_transport_config(
     enrollments_path: &str,
     host_key_path: &str,
@@ -588,13 +1120,36 @@ fn build_auth_transport_config(
     }
     let pins: P009EnrollmentPins = serde_json::from_str(&input)
         .map_err(|error| format!("invalid enrollment file: {error}"))?;
-    if pins.schema_version != 1 {
+    if pins.schema_version != 2 {
         return Err("unsupported enrollment schema".into());
     }
+    if pins.expires_at_unix_ms <= unix_now_ms()? {
+        return Err(
+            "test enrollment is expired; export and pin a fresh test-only enrollment".into(),
+        );
+    }
+    if pins.host_enrollment.linux_uid != current_linux_uid()? {
+        return Err(
+            "enrollment Linux UID does not match the effective UID running this command".into(),
+        );
+    }
+    validate_research_identifier(&pins.host_enrollment.enrollment_id)?;
+    validate_research_identifier(&pins.host_enrollment.host_identity)?;
+    validate_research_identifier(&pins.watch_enrollment.enrollment_id)?;
+    validate_research_identifier(&pins.watch_enrollment.watch_identity)?;
+    validate_research_identifier(&pins.watch_enrollment.bound_host_enrollment_id)?;
+    validate_research_identifier(&pins.watch_enrollment.bound_host_identity)?;
     if !pins.host_enrollment.test_only || !pins.watch_enrollment.test_only {
         return Err("P009 currently accepts test-only enrollment records only".into());
     }
-    if pins.watch_enrollment.state != EnrollmentState::Active
+    if pins.host_enrollment.state != EnrollmentState::Active
+        || pins.watch_enrollment.state != EnrollmentState::Active
+        || pins.host_enrollment.key_algorithm
+            != opencontinuity_core::watch_auth_research::KeyAlgorithm::P256EcdsaSha256
+        || pins.watch_enrollment.key_algorithm
+            != opencontinuity_core::watch_auth_research::KeyAlgorithm::P256EcdsaSha256
+        || pins.host_enrollment.key_version != 1
+        || pins.watch_enrollment.key_version != 1
         || pins.watch_enrollment.bound_host_enrollment_id != pins.host_enrollment.enrollment_id
         || pins.watch_enrollment.bound_host_identity != pins.host_enrollment.host_identity
         || pins.watch_enrollment.bound_linux_uid != pins.host_enrollment.linux_uid
@@ -602,54 +1157,66 @@ fn build_auth_transport_config(
         return Err("Watch enrollment is inactive or is not bound to this host/account".into());
     }
     let signing_key = load_test_host_signing_key(host_key_path)?;
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| "system clock is before the Unix epoch".to_owned())?
-        .as_millis()
-        .min(u64::MAX as u128) as u64;
-    let signed: SignedHostRequest = build_host_request(
-        &pins.host_enrollment,
-        &signing_key,
-        pins.watch_enrollment.enrollment_id.clone(),
-        now_ms,
-        60_000,
-    )
-    .map_err(|error| error.to_string())?;
-    let canonical = signed
-        .request
-        .canonical_bytes()
-        .map_err(|error| error.to_string())?;
-    let envelope = SignedEnvelope::new(
-        AuthTransportDirection::HostToWatch,
-        &canonical,
-        &signed.signature_raw,
-    )
-    .map_err(|error| format!("signed host request is not a valid envelope: {error:?}"))?;
+    let actual_host_key = encode_hex(
+        signing_key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes(),
+    );
+    if actual_host_key != pins.host_enrollment.public_key_sec1_hex {
+        return Err("host key file does not match the independently pinned host public key".into());
+    }
+    let watch_key = decode_hex(&pins.watch_enrollment.public_key_sec1_hex)?;
+    if encode_hex(&watch_key) != pins.watch_enrollment.public_key_sec1_hex {
+        return Err("Watch public key must use canonical lowercase hexadecimal SEC1 bytes".into());
+    }
+    p256::ecdsa::VerifyingKey::from_sec1_bytes(&watch_key).map_err(|_| {
+        "Watch enrollment public key is incomplete or invalid P-256 SEC1".to_owned()
+    })?;
     Ok(gatt::AuthTransportConfig {
-        request_envelope: envelope.as_bytes(),
+        host_signing_key: signing_key,
         host_enrollment: pins.host_enrollment,
         watch_enrollment: pins.watch_enrollment,
+        enrollment_expires_at_unix_ms: pins.expires_at_unix_ms,
     })
 }
 
 fn load_test_host_signing_key(path: &str) -> Result<SigningKey, String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("could not inspect host key file: {error}"))?;
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|error| format!("could not safely open host key file: {error}"))?
+    };
+    #[cfg(not(unix))]
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("could not safely open host key file: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("could not inspect opened host key file: {error}"))?;
     if !metadata.file_type().is_file() {
-        return Err("host signing key must be a regular file, not a symlink".into());
+        return Err("host signing key must be a regular file".into());
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(
                 "host signing key file must not be accessible to group or other users".into(),
             );
         }
+        if metadata.uid() != current_linux_uid()? {
+            return Err(
+                "host key file must be owned by the effective Linux UID running this command"
+                    .into(),
+            );
+        }
     }
     let mut encoded = Vec::new();
-    fs::File::open(path)
-        .map_err(|error| format!("could not open host key file: {error}"))?
+    file.by_ref()
         .take(65)
         .read_to_end(&mut encoded)
         .map_err(|error| format!("could not read host key file: {error}"))?;
@@ -988,5 +1555,56 @@ mod tests {
         assert_eq!(value["source"], "mock_fixture");
         assert_eq!(value["observations"][0]["rssi_dbm"], -61);
         assert!(value.get("trusted_identity").is_none());
+    }
+
+    #[test]
+    fn fingerprint_confirmation_requires_exact_canonical_sha256_hex() {
+        let expected = "a".repeat(64);
+        assert!(validate_fingerprint_confirmation("host", &expected, &expected).is_ok());
+        assert!(
+            validate_fingerprint_confirmation("host", &expected.to_uppercase(), &expected).is_err()
+        );
+        assert!(validate_fingerprint_confirmation("host", &"b".repeat(64), &expected).is_err());
+        assert!(validate_fingerprint_confirmation("host", "aa:bb", &expected).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn generated_host_key_is_new_private_mode_0600_and_never_overwrites() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "opencontinuity-p009a-host-key-{}-{unique}",
+            std::process::id()
+        ));
+        let path_text = path.to_string_lossy().into_owned();
+        let fingerprint = create_test_host_key_file(&path_text).unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        let private_scalar_hex = fs::read(&path).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(private_scalar_hex.len(), 64);
+        assert!(
+            private_scalar_hex
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        );
+        assert!(!private_scalar_hex.contains(&b'\n'));
+        let scalar = decode_hex(std::str::from_utf8(&private_scalar_hex).unwrap()).unwrap();
+        let key = SigningKey::from_slice(&scalar).unwrap();
+        assert_eq!(
+            fingerprint,
+            hex_digest(&Sha256::digest(
+                key.verifying_key().to_encoded_point(false).as_bytes()
+            ))
+        );
+
+        let before = private_scalar_hex.clone();
+        assert!(create_test_host_key_file(&path_text).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        fs::remove_file(path).unwrap();
     }
 }

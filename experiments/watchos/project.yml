@@ -14,6 +14,7 @@ targets:
       - path: ContentView.swift
       - path: WatchBluetoothManager.swift
       - path: ResearchConsentView.swift
+      - path: AuthenticatedResearchView.swift
       - path: GattIdentifiers.swift
       - path: GattResearchState.swift
     dependencies:

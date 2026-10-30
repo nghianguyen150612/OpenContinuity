@@ -68,6 +68,60 @@ final class WatchAuthTransportTests: XCTestCase {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
+    func testConsentAndResponseDeadlinesStartPerPhaseAndNeverExtendSignedExpiry() {
+        let consent = WatchAuthMonotonicDeadline(
+            startedAtMilliseconds: 1_000,
+            timeoutMilliseconds: WatchAuthTransport.waitingForConsentTimeoutMilliseconds,
+            hardDeadlineMilliseconds: 61_000
+        )
+        XCTAssertEqual(consent.deadlineMilliseconds, 26_000)
+        XCTAssertTrue(consent.isActive(atMilliseconds: 25_999))
+        XCTAssertFalse(consent.isActive(atMilliseconds: 26_000))
+
+        let lateResponse = WatchAuthMonotonicDeadline(
+            startedAtMilliseconds: 25_000,
+            timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
+            hardDeadlineMilliseconds: min(consent.deadlineMilliseconds, 61_000)
+        )
+        XCTAssertEqual(lateResponse.deadlineMilliseconds, 26_000)
+        XCTAssertEqual(lateResponse.remainingMilliseconds(atMilliseconds: 25_999), 1)
+        XCTAssertFalse(lateResponse.isActive(atMilliseconds: 26_000))
+
+        let signedExpiryFirst = WatchAuthMonotonicDeadline(
+            startedAtMilliseconds: 1_000,
+            timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
+            hardDeadlineMilliseconds: 5_000
+        )
+        XCTAssertEqual(signedExpiryFirst.deadlineMilliseconds, 5_000)
+    }
+
+    func testConsentAndResponseDeadlinesStartPerPhaseAndNeverExtendSignedExpiry() {
+        let consent = WatchAuthMonotonicDeadline(
+            startedAtMilliseconds: 1_000,
+            timeoutMilliseconds: WatchAuthTransport.waitingForConsentTimeoutMilliseconds,
+            hardDeadlineMilliseconds: 61_000
+        )
+        XCTAssertEqual(consent.deadlineMilliseconds, 26_000)
+        XCTAssertTrue(consent.isActive(atMilliseconds: 25_999))
+        XCTAssertFalse(consent.isActive(atMilliseconds: 26_000))
+
+        let lateResponse = WatchAuthMonotonicDeadline(
+            startedAtMilliseconds: 25_000,
+            timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
+            hardDeadlineMilliseconds: min(consent.deadlineMilliseconds, 61_000)
+        )
+        XCTAssertEqual(lateResponse.deadlineMilliseconds, 26_000)
+        XCTAssertEqual(lateResponse.remainingMilliseconds(atMilliseconds: 25_999), 1)
+        XCTAssertFalse(lateResponse.isActive(atMilliseconds: 26_000))
+
+        let signedExpiryFirst = WatchAuthMonotonicDeadline(
+            startedAtMilliseconds: 1_000,
+            timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
+            hardDeadlineMilliseconds: 5_000
+        )
+        XCTAssertEqual(signedExpiryFirst.deadlineMilliseconds, 5_000)
+    }
+
     private var hostEnrollment: HostEnrollment {
         let value = p008Fixture.host_enrollment
         return HostEnrollment(
@@ -213,6 +267,70 @@ final class WatchAuthTransportTests: XCTestCase {
         try cursor.acknowledge(owner: "watch-client", transferID: transferID, index: 1, nowMilliseconds: now)
         try cursor.complete(owner: "watch-client", transferID: transferID, nowMilliseconds: now)
         XCTAssertThrowsError(try cursor.complete(owner: "watch-client", transferID: transferID, nowMilliseconds: now))
+    }
+
+    func testMonotonicTransferClockSeparatesInactivityFromAbsoluteTimeout() throws {
+        let fixture = p008Fixture
+        let request = try WatchSignedEnvelope(
+            direction: .hostToWatch,
+            canonical: bytes(fixture.request.canonical_hex),
+            signatureRaw: bytes(fixture.request.signature_raw_hex)
+        )
+        let transferID = Data(repeating: 0x73, count: 8)
+        let frames = try WatchAuthTransportCodec.frames(envelope: request, transferID: transferID)
+        XCTAssertGreaterThan(frames.count, 3)
+
+        let origin: UInt64 = 1_000_000
+        var longTransfer = try WatchTransferAssembler(
+            transferID: transferID,
+            direction: .hostToWatch,
+            owner: "watch-client",
+            createdAtMilliseconds: origin
+        )
+        try longTransfer.push(owner: "watch-client", direction: .hostToWatch, frame: frames[0], nowMilliseconds: origin + 7_000)
+        try longTransfer.push(owner: "watch-client", direction: .hostToWatch, frame: frames[1], nowMilliseconds: origin + 14_000)
+        XCTAssertThrowsError(try longTransfer.push(
+            owner: "watch-client",
+            direction: .hostToWatch,
+            frame: frames[2],
+            nowMilliseconds: origin + WatchAuthTransport.requestTransferTimeoutMilliseconds
+        )) {
+            XCTAssertEqual($0 as? WatchTransportError, .transferExpired)
+        }
+
+        var stalledTransfer = try WatchTransferAssembler(
+            transferID: transferID,
+            direction: .hostToWatch,
+            owner: "watch-client",
+            createdAtMilliseconds: origin
+        )
+        try stalledTransfer.push(owner: "watch-client", direction: .hostToWatch, frame: frames[0], nowMilliseconds: origin + 1)
+        XCTAssertThrowsError(try stalledTransfer.push(
+            owner: "watch-client",
+            direction: .hostToWatch,
+            frame: frames[1],
+            nowMilliseconds: origin + 8_001
+        )) {
+            XCTAssertEqual($0 as? WatchTransportError, .inactivityExpired)
+        }
+
+        var cursor = try WatchRequestReadCursor(
+            transferID: transferID,
+            owner: "watch-client",
+            totalFrameCount: 2,
+            nowMilliseconds: origin
+        )
+        try cursor.requested(owner: "watch-client", transferID: transferID, index: 0, nowMilliseconds: origin + 7_000)
+        try cursor.didRead(owner: "watch-client", transferID: transferID, index: 0, nowMilliseconds: origin + 14_000)
+        try cursor.acknowledge(owner: "watch-client", transferID: transferID, index: 0, nowMilliseconds: origin + 19_000)
+        XCTAssertThrowsError(try cursor.requested(
+            owner: "watch-client",
+            transferID: transferID,
+            index: 1,
+            nowMilliseconds: origin + WatchAuthTransport.requestTransferTimeoutMilliseconds
+        )) {
+            XCTAssertEqual($0 as? WatchTransportError, .transferExpired)
+        }
     }
 
     /// CI supplies bytes emitted by the Rust framing implementation and reads

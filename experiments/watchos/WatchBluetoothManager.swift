@@ -10,12 +10,13 @@ struct ExperimentPeripheral: Identifiable {
     var id: UUID { peripheral.identifier }
 }
 
-/// Test-only credentials are injected by an in-memory research harness. The
-/// application has no persistent enrollment or key provisioning path.
+/// Active test-only credentials are assembled by the explicit enrollment UI.
+/// The application has no persistent enrollment or production key store.
 struct P009ResearchCredentials {
     let hostEnrollment: HostEnrollment
     let watchEnrollment: WatchEnrollment
     let signingKey: P256.Signing.PrivateKey
+    let expiresAtUnixMilliseconds: UInt64
 }
 
 struct P009ConsentPresentation: Identifiable {
@@ -33,6 +34,17 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     @Published private(set) var selectedName = "None"
     @Published private(set) var protocolVersion = "—"
     @Published private(set) var detail = "Synthetic transport only. No authentication or unlock."
+    @Published private(set) var researchSetupGeneration = UUID()
+    @Published private(set) var researchKeyCreated = false
+    @Published private(set) var researchHostPinImported = false
+    @Published private(set) var researchEnrollmentReady = false
+    @Published private(set) var researchHostFingerprint = ""
+    @Published private(set) var researchWatchFingerprint = ""
+    @Published private(set) var researchHostIdentity = ""
+    @Published private(set) var researchLinuxUID: UInt32 = 0
+    @Published private(set) var researchEnrollmentExport = ""
+    @Published private(set) var researchEnrollmentMetadata = ""
+    @Published private(set) var researchSetupMessage = "No authenticated research credentials are stored."
     @Published var consentPresentation: P009ConsentPresentation?
 
     private var central: CBCentralManager!
@@ -41,6 +53,9 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     private var expectedService: CBService?
     private var connectionDelegate: ConnectionDelegate?
     var canStartScan: Bool { lifecycle.canScan && state != .scanning }
+    var canEditResearchSetup: Bool {
+        state == .idle || state == .completedResearchDecision || state == .cancelled || state == .disconnected || isFailedState
+    }
     private var peripheral: CBPeripheral?
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
     private var generationGate = GattGenerationGate()
@@ -55,6 +70,12 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     private var cancelRequested = false
     private var scanGeneration: UInt64?
     private var authCredentials: P009ResearchCredentials?
+    private var temporaryResearchSigningKey: P256.Signing.PrivateKey?
+    private var importedHostEnrollment: HostEnrollment?
+    private var importedHostRecord: P009HostEnrollmentRecord?
+    private var importedHostExpiry: UInt64?
+    private var watchEnrollmentForExport: WatchEnrollment?
+    private var watchRecordForExport: P009WatchEnrollmentRecord?
     private var authTransferID: Data?
     private var authOwner: String?
     private var authFrameCount = 0
@@ -62,6 +83,11 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     private var authReadCursor: WatchRequestReadCursor?
     private var authResponseFrames: [Data] = []
     private var authResponseFrameIndex = 0
+    private var authRequestCompleteSentAtMonotonicMilliseconds: UInt64?
+    private var authConsentDeadline: WatchAuthMonotonicDeadline?
+    private var authResponseDeadline: WatchAuthMonotonicDeadline?
+    private var authResponseDecision: String?
+    private var authSignedExpiryMonotonicMilliseconds: UInt64?
     private var authVerifiedRequest: VerifiedHostRequest?
     private var authReplayGuard = WatchAuthReplayGuard()
     private var authPhase: AuthPhase?
@@ -84,24 +110,211 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         beginScan(authenticated: false)
     }
 
-    /// Starts the P009 scan only when a caller injects independently enrolled
-    /// test records and the matching temporary signing key in memory.
-    func startAuthenticatedResearch(credentials: P009ResearchCredentials) {
-        guard central.state == .poweredOn, canStartScan else {
-            detail = "P009 can start only from an idle foreground Bluetooth state."
+    func createTemporaryResearchKey() {
+        guard authCredentials == nil, canEditResearchSetup else {
+            researchSetupMessage = "End the current transport session before creating a new test key."
             return
         }
-        guard credentials.hostEnrollment.testOnly,
-              credentials.watchEnrollment.testOnly,
-              credentials.watchEnrollment.boundHostEnrollmentID == credentials.hostEnrollment.enrollmentID,
-              credentials.watchEnrollment.boundHostIdentity == credentials.hostEnrollment.hostIdentity,
-              credentials.watchEnrollment.boundLinuxUID == credentials.hostEnrollment.linuxUID,
-              credentials.signingKey.publicKey.x963Representation == credentials.watchEnrollment.publicKeySEC1 else {
-            detail = "P009 requires matching test-only pins and an injected temporary Watch key."
+        temporaryResearchSigningKey = nil
+        watchEnrollmentForExport = nil
+        watchRecordForExport = nil
+        researchWatchFingerprint = ""
+        researchEnrollmentExport = ""
+        researchEnrollmentReady = false
+        researchSetupGeneration = UUID()
+        temporaryResearchSigningKey = P256.Signing.PrivateKey()
+        researchKeyCreated = true
+        rebuildWatchEnrollmentIfReady()
+        researchSetupMessage = "Ephemeral P-256 test key created in memory. Its private key is not exported or saved."
+    }
+
+    func importResearchHostPin(_ data: Data) {
+        guard authCredentials == nil, canEditResearchSetup else {
+            researchSetupMessage = "End the current authenticated research session before importing a new host pin."
+            return
+        }
+        do {
+            let document = try JSONDecoder().decode(P009HostPinDocument.self, from: data)
+            let now = currentMilliseconds
+            let host = try document.validate(nowMilliseconds: now)
+            let fingerprint = p009Fingerprint(host.publicKeySEC1)
+            importedHostEnrollment = host
+            importedHostRecord = document.hostEnrollment
+            importedHostExpiry = document.expiresAtUnixMs
+            researchHostFingerprint = fingerprint
+            researchHostIdentity = host.hostIdentity
+            researchLinuxUID = host.linuxUID
+            researchHostPinImported = true
+            watchEnrollmentForExport = nil
+            watchRecordForExport = nil
+            researchWatchFingerprint = ""
+            researchEnrollmentExport = ""
+            researchEnrollmentReady = false
+            researchSetupGeneration = UUID()
+            rebuildWatchEnrollmentIfReady()
+            researchSetupMessage = "Host test pin imported. Compare its fingerprint through a separate channel before activation."
+        } catch P009EnrollmentError.expired {
+            researchSetupMessage = "Host test pin is expired or exceeds its one-hour validity window. Export a fresh host pin."
+            clearImportedHostPin()
+        } catch P009EnrollmentError.mismatchedFingerprint {
+            researchSetupMessage = "Host public key fingerprint does not match its imported record. Nothing was activated."
+            clearImportedHostPin()
+        } catch {
+            researchSetupMessage = "Host pin is incomplete, unsupported, or not valid test-only P-256 data."
+            clearImportedHostPin()
+        }
+    }
+
+    func startAuthenticatedResearch(
+        hostFingerprintConfirmed: Bool,
+        watchFingerprintConfirmed: Bool
+    ) {
+        guard central.state == .poweredOn, canStartScan else {
+            detail = "Authenticated research can start only from an idle foreground Bluetooth state."
+            return
+        }
+        guard hostFingerprintConfirmed, watchFingerprintConfirmed,
+              let credentials = makeResearchCredentials() else {
+            researchSetupMessage = "Activation requires complete, unexpired test pins and explicit fingerprint confirmations for both keys."
             return
         }
         authCredentials = credentials
+        temporaryResearchSigningKey = nil
+        researchKeyCreated = false
+        researchEnrollmentReady = false
+        authReplayGuard = WatchAuthReplayGuard()
+        researchSetupMessage = "Authenticated research started with test-only enrollment. No Linux authorization is available."
         beginScan(authenticated: true)
+    }
+
+    func prepareLinuxEnrollmentExport() {
+        rebuildWatchEnrollmentIfReady()
+        guard researchEnrollmentReady else {
+            researchSetupMessage = "Create an ephemeral Watch key and import a complete, unexpired host pin first."
+            return
+        }
+        researchSetupMessage = "Share this public enrollment JSON with the Linux operator. Compare the Watch fingerprint out of band before activating."
+    }
+
+    func clearAuthenticatedResearch() {
+        disconnect()
+        clearTemporaryResearchEnrollment(message: "Authenticated research state and ephemeral private key cleared.")
+    }
+
+    func reportResearchSetupError(_ message: String) {
+        researchSetupMessage = message
+    }
+
+    private func rebuildWatchEnrollmentIfReady() {
+        guard let key = temporaryResearchSigningKey,
+              let host = importedHostEnrollment,
+              let hostRecord = importedHostRecord,
+              let expiresAt = importedHostExpiry,
+              expiresAt > currentMilliseconds else {
+            researchEnrollmentReady = false
+            return
+        }
+        if watchEnrollmentForExport != nil, watchRecordForExport != nil { return }
+        let suffix = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        let enrollmentID = "test-watch-\(suffix)"
+        let watchIdentity = "watch-research-\(suffix)"
+        let publicKey = Data(key.publicKey.x963Representation)
+        let record = P009WatchEnrollmentRecord(
+            enrollmentID: enrollmentID,
+            watchIdentity: watchIdentity,
+            boundHostEnrollmentID: host.enrollmentID,
+            boundHostIdentity: host.hostIdentity,
+            boundLinuxUID: host.linuxUID,
+            publicKeySEC1Hex: p009Hex(publicKey),
+            keyAlgorithm: "p256_ecdsa_sha256",
+            keyVersion: 1,
+            state: "active",
+            testOnly: true
+        )
+        let model = WatchEnrollment(
+            enrollmentID: enrollmentID,
+            watchIdentity: watchIdentity,
+            boundHostEnrollmentID: host.enrollmentID,
+            boundHostIdentity: host.hostIdentity,
+            boundLinuxUID: host.linuxUID,
+            publicKeySEC1: publicKey,
+            algorithm: .p256EcdsaSha256,
+            keyVersion: 1,
+            state: .active,
+            testOnly: true
+        )
+        do {
+            let document = P009LinuxEnrollmentDocument(
+                expiresAtUnixMs: expiresAt,
+                hostEnrollment: hostRecord,
+                watchEnrollment: record
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(document)
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw P009EnrollmentError.incompleteOrUnsupported
+            }
+            watchEnrollmentForExport = model
+            watchRecordForExport = record
+            researchWatchFingerprint = p009Fingerprint(publicKey)
+            researchEnrollmentMetadata = "\(watchIdentity) · host \(host.hostIdentity) · Linux UID \(host.linuxUID) · expires \(expiresAt)"
+            researchEnrollmentExport = text
+            researchEnrollmentReady = true
+            researchSetupGeneration = UUID()
+        } catch {
+            watchEnrollmentForExport = nil
+            watchRecordForExport = nil
+            researchEnrollmentExport = ""
+            researchEnrollmentReady = false
+            researchSetupMessage = "Could not encode the test-only public enrollment record."
+        }
+    }
+
+    private func makeResearchCredentials() -> P009ResearchCredentials? {
+        guard researchEnrollmentReady,
+              let host = importedHostEnrollment,
+              let watch = watchEnrollmentForExport,
+              let signingKey = temporaryResearchSigningKey,
+              let expiresAt = importedHostExpiry,
+              expiresAt > currentMilliseconds,
+              signingKey.publicKey.x963Representation == watch.publicKeySEC1 else { return nil }
+        return P009ResearchCredentials(
+            hostEnrollment: host,
+            watchEnrollment: watch,
+            signingKey: signingKey,
+            expiresAtUnixMilliseconds: expiresAt
+        )
+    }
+
+    private var isFailedState: Bool {
+        if case .failed = state { return true }
+        return false
+    }
+
+    private func clearImportedHostPin() {
+        importedHostEnrollment = nil
+        importedHostRecord = nil
+        importedHostExpiry = nil
+        watchEnrollmentForExport = nil
+        watchRecordForExport = nil
+        researchHostPinImported = false
+        researchEnrollmentReady = false
+        researchHostFingerprint = ""
+        researchHostIdentity = ""
+        researchLinuxUID = 0
+        researchWatchFingerprint = ""
+        researchEnrollmentMetadata = ""
+        researchEnrollmentExport = ""
+        researchSetupGeneration = UUID()
+    }
+
+    private func clearTemporaryResearchEnrollment(message: String) {
+        temporaryResearchSigningKey = nil
+        authCredentials = nil
+        clearImportedHostPin()
+        researchKeyCreated = false
+        researchSetupMessage = message
     }
 
     private func beginScan(authenticated: Bool) {
@@ -117,7 +330,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             ? CBUUID(string: WatchAuthTransport.service)
             : GattIdentifiers.service
         central.scanForPeripherals(withServices: [service], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
-        arm(seconds: 15, token: token, message: "Scan timed out") { [weak self] in
+        arm(seconds: WatchAuthTransport.bleClientScanTimeoutSeconds, token: token, message: "Scan timed out") { [weak self] in
             guard let self, self.scanGeneration == token else { return }
             self.central.stopScan()
             self.scanGeneration = nil
@@ -152,7 +365,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         state = .connecting
         _ = lifecycle.begin(.connect)
         central.connect(item.peripheral)
-        arm(seconds: 15, token: token, message: "Connection timed out") { [weak self] in
+        arm(seconds: WatchAuthTransport.bleConnectTimeoutSeconds, token: token, message: "Connection timed out") { [weak self] in
             guard let self, self.generation == token else { return }
             self.fail("Connection timed out")
         }
@@ -194,7 +407,14 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     func applicationDidSuspend() {
-        disconnect()
+        central.stopScan()
+        scanGeneration = nil
+        generationGate.advance()
+        clearProtocolState()
+        lifecycle.terminate()
+        if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        clearTemporaryResearchEnrollment(message: "App left the foreground; test enrollment and ephemeral private key were cleared.")
+        state = .cancelled
         detail = "Foreground session ended; session data discarded. Reconnect for a fresh challenge."
     }
 
@@ -223,7 +443,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         guard frameIndex < frames.count else { sendControl(cancel: false); return }
         let frame = frames[frameIndex]
         guard frame.count <= 20 else { fail("Frame exceeds conservative 20-byte write limit"); return }
-        arm(seconds: 8, token: generation, message: "Frame write timed out") { [weak self] in self?.fail("Frame write timed out") }
+        arm(seconds: WatchAuthTransport.bleCallbackTimeoutSeconds, token: generation, message: "Frame write timed out") { [weak self] in self?.fail("Frame write timed out") }
         guard beginOperation(.write(characteristic.uuid.uuidString), characteristic: characteristic) else { return }
         peripheral.writeValue(frame, for: characteristic, type: .withResponse)
     }
@@ -234,7 +454,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         do { value = try GattWireCodec.control(sessionID: id, cancel: cancel) }
         catch { fail("Could not encode control command"); return }
         state = .awaitingResponse
-        arm(seconds: 8, token: generation, message: "Control write timed out") { [weak self] in self?.fail("Control write timed out") }
+        arm(seconds: WatchAuthTransport.bleCallbackTimeoutSeconds, token: generation, message: "Control write timed out") { [weak self] in self?.fail("Control write timed out") }
         guard beginOperation(.write(control.uuid.uuidString), characteristic: control) else { return }
         peripheral.writeValue(value, for: control, type: .withResponse)
     }
@@ -243,7 +463,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         guard let peripheral, let characteristic = characteristics[uuid] else { fail("Required characteristic missing"); return }
         expectedRead = uuid
         state = uuid == GattIdentifiers.version ? .discovering : (uuid == GattIdentifiers.challenge ? .readingChallenge : .awaitingResponse)
-        arm(seconds: 8, token: generation, message: "Characteristic read timed out") { [weak self] in self?.fail("Characteristic read timed out") }
+        arm(seconds: WatchAuthTransport.bleCallbackTimeoutSeconds, token: generation, message: "Characteristic read timed out") { [weak self] in self?.fail("Characteristic read timed out") }
         guard beginOperation(.read(uuid.uuidString), characteristic: characteristic) else { return }
         peripheral.readValue(for: characteristic)
     }
@@ -255,7 +475,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         }
         expectedRead = uuid
         state = uuid == CBUUID(string: WatchAuthTransport.status) ? .readingAuthStatus : .readingAuthRequest
-        arm(seconds: 8, token: generation, message: "P009 characteristic read timed out") { [weak self] in
+        arm(seconds: WatchAuthTransport.bleCallbackTimeoutSeconds, token: generation, message: "P009 characteristic read timed out") { [weak self] in
             self?.fail("P009 characteristic read timed out")
         }
         guard beginOperation(.read(uuid.uuidString), characteristic: characteristic) else { return }
@@ -283,13 +503,13 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                     transferID: transferID,
                     direction: .hostToWatch,
                     owner: owner,
-                    createdAtMilliseconds: currentMilliseconds
+                    createdAtMilliseconds: currentMonotonicMilliseconds
                 )
                 authReadCursor = try WatchRequestReadCursor(
                     transferID: transferID,
                     owner: owner,
                     totalFrameCount: count,
-                    nowMilliseconds: currentMilliseconds
+                    nowMilliseconds: currentMonotonicMilliseconds
                 )
                 try requestAuthFrame(0)
                 return
@@ -308,9 +528,9 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                 direction: .hostToWatch,
                 frame: value,
                 mtu: 23,
-                nowMilliseconds: currentMilliseconds
+                nowMilliseconds: currentMonotonicMilliseconds
             )
-            try cursor.didRead(owner: owner, transferID: transferID, index: index, nowMilliseconds: currentMilliseconds)
+            try cursor.didRead(owner: owner, transferID: transferID, index: index, nowMilliseconds: currentMonotonicMilliseconds)
             authAssembler = assembler
             authReadCursor = cursor
             try writeAuthCommand(.acknowledge(UInt8(index)), characteristicUUID: WatchAuthTransport.requestControl, phase: .requestAck(index))
@@ -324,7 +544,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
               index >= 0, index < authFrameCount, let byteIndex = UInt8(exactly: index) else {
             throw WatchTransportError.duplicateOrOutOfOrder
         }
-        try cursor.requested(owner: owner, transferID: transferID, index: index, nowMilliseconds: currentMilliseconds)
+        try cursor.requested(owner: owner, transferID: transferID, index: index, nowMilliseconds: currentMonotonicMilliseconds)
         authReadCursor = cursor
         try writeAuthCommand(.get(byteIndex), characteristicUUID: WatchAuthTransport.requestControl, phase: .requestGet(index))
     }
@@ -354,10 +574,13 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         default:
             state = .sendingAuthControl
         }
-        arm(seconds: 8, token: generation, message: "P009 write-with-response timed out") { [weak self] in
+        arm(seconds: WatchAuthTransport.bleCallbackTimeoutSeconds, token: generation, message: "P009 write-with-response timed out") { [weak self] in
             self?.fail("P009 write-with-response timed out")
         }
         guard beginOperation(.write(characteristic.uuid.uuidString), characteristic: characteristic) else { return }
+        if case .requestComplete = phase {
+            authRequestCompleteSentAtMonotonicMilliseconds = currentMonotonicMilliseconds
+        }
         peripheral.writeValue(value, for: characteristic, type: .withResponse)
     }
 
@@ -366,19 +589,35 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
               var assembler = authAssembler, let credentials = authCredentials else {
             throw WatchTransportError.incompleteTransfer
         }
-        let envelope = try assembler.complete(owner: owner, transferID: transferID, nowMilliseconds: currentMilliseconds)
+        let envelope = try assembler.complete(owner: owner, transferID: transferID, nowMilliseconds: currentMonotonicMilliseconds)
         state = .verifyingAuthRequest
+        let verifiedAtWallMilliseconds = currentMilliseconds
+        let verifiedAtMonotonicMilliseconds = currentMonotonicMilliseconds
         let verified = try WatchAuthProtocol.verifyHostTransportEnvelope(
             bytes: envelope.bytes,
             enrollment: credentials.hostEnrollment,
             expectedWatchEnrollmentID: credentials.watchEnrollment.enrollmentID,
-            nowMilliseconds: currentMilliseconds,
+            nowMilliseconds: verifiedAtWallMilliseconds,
             replayGuard: &authReplayGuard
         )
         try WatchAuthProtocol.validateWatchResponseEligibility(
             verifiedRequest: verified,
             enrollment: credentials.watchEnrollment,
             signingKey: credentials.signingKey
+        )
+        guard verifiedAtWallMilliseconds < verified.request.expiresAtMilliseconds else {
+            throw WatchAuthError.expired
+        }
+        let signedExpiryMonotonic = verifiedAtMonotonicMilliseconds
+            + (verified.request.expiresAtMilliseconds - verifiedAtWallMilliseconds)
+        authSignedExpiryMonotonicMilliseconds = signedExpiryMonotonic
+        guard let consentStartedAt = authRequestCompleteSentAtMonotonicMilliseconds else {
+            throw WatchTransportError.incompleteTransfer
+        }
+        authConsentDeadline = WatchAuthMonotonicDeadline(
+            startedAtMilliseconds: consentStartedAt,
+            timeoutMilliseconds: WatchAuthTransport.waitingForConsentTimeoutMilliseconds,
+            hardDeadlineMilliseconds: signedExpiryMonotonic
         )
         authAssembler = assembler
         authVerifiedRequest = verified
@@ -387,10 +626,19 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             watchEnrollment: credentials.watchEnrollment,
             signingKey: credentials.signingKey
         )
+        guard currentMilliseconds < verified.request.expiresAtMilliseconds,
+              authConsentDeadline?.isActive(atMilliseconds: currentMonotonicMilliseconds) == true else {
+            throw WatchAuthError.expired
+        }
         state = .awaitingResearchConsent
         detail = "P009 request signature, enrollment, action, UID, session, freshness, and replay checks passed. Awaiting an explicit choice."
-        arm(seconds: 30, token: generation, message: "P009 research session timed out") { [weak self] in
-            self?.fail("P009 research session timed out before a signed response")
+        guard let consentDeadline = authConsentDeadline else {
+            throw WatchTransportError.incompleteTransfer
+        }
+        let consentRemaining = consentDeadline.remainingMilliseconds(atMilliseconds: currentMonotonicMilliseconds)
+        let consentSeconds = max(1, (consentRemaining + 999) / 1_000)
+        arm(seconds: consentSeconds, token: generation, message: "P009 consent deadline elapsed") { [weak self] in
+            self?.fail("Waiting-for-consent deadline elapsed or signed P008 request expired. Start again for a fresh request, nonce, and session.")
         }
     }
 
@@ -400,6 +648,14 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     ) {
         guard consentPresentation?.id == presentationID,
               state == .awaitingResearchConsent else { return }
+        guard let consentDeadline = authConsentDeadline,
+              consentDeadline.isActive(atMilliseconds: currentMonotonicMilliseconds),
+              let signedDeadline = authSignedExpiryMonotonicMilliseconds,
+              currentMonotonicMilliseconds < signedDeadline,
+              currentMilliseconds < (authVerifiedRequest?.request.expiresAtMilliseconds ?? 0) else {
+            fail("Waiting-for-consent deadline or signed P008 expiry elapsed. Start again for a fresh request, nonce, and session.")
+            return
+        }
         watchdog?.cancel()
         consentPresentation = nil
         switch result {
@@ -413,6 +669,17 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         case .success(let signed):
             do {
                 guard let transferID = authTransferID else { throw WatchTransportError.sessionMismatch }
+                let now = currentMilliseconds
+                guard let credentials = authCredentials,
+                      let expiresAt = authVerifiedRequest?.request.expiresAtMilliseconds,
+                      now < expiresAt,
+                      let monotonicExpiry = authSignedExpiryMonotonicMilliseconds,
+                      currentMonotonicMilliseconds < monotonicExpiry,
+                      signed.response.responseAtMilliseconds < expiresAt,
+                      signed.response.responseAtMilliseconds <= now,
+                      credentials.expiresAtUnixMilliseconds > now else {
+                    throw WatchAuthError.expired
+                }
                 let envelope = try WatchSignedEnvelope(
                     direction: .watchToHost,
                     canonical: signed.response.canonicalBytes(),
@@ -420,6 +687,12 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                 )
                 authResponseFrames = try WatchAuthTransportCodec.frames(envelope: envelope, transferID: transferID, mtu: 23)
                 authResponseFrameIndex = 0
+                authResponseDeadline = WatchAuthMonotonicDeadline(
+                    startedAtMilliseconds: currentMonotonicMilliseconds,
+                    timeoutMilliseconds: WatchAuthTransport.responseTransferTimeoutMilliseconds,
+                    hardDeadlineMilliseconds: min(consentDeadline.deadlineMilliseconds, signedDeadline)
+                )
+                authResponseDecision = signed.response.decision == .approved ? "approved" : "rejected"
                 state = .sendingAuthResponse
                 try sendNextAuthResponseFrame()
             } catch {
@@ -432,6 +705,9 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         guard let peripheral,
               let characteristic = characteristics[CBUUID(string: WatchAuthTransport.responseData)] else {
             throw WatchTransportError.incompleteTransfer
+        }
+        guard authResponseDeadline?.isActive(atMilliseconds: currentMonotonicMilliseconds) == true else {
+            throw WatchTransportError.transferExpired
         }
         guard authResponseFrameIndex < authResponseFrames.count else {
             try writeAuthCommand(.complete, characteristicUUID: WatchAuthTransport.responseControl, phase: .responseComplete)
@@ -446,6 +722,10 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
 
     private var currentMilliseconds: UInt64 {
         UInt64(max(0, Date().timeIntervalSince1970 * 1_000))
+    }
+
+    private var currentMonotonicMilliseconds: UInt64 {
+        DispatchTime.now().uptimeNanoseconds / 1_000_000
     }
 
     private func arm(seconds: UInt64, token: UInt64, message: String, action: @escaping @MainActor () -> Void) {
@@ -477,10 +757,30 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         authReadCursor = nil
         authResponseFrames.removeAll()
         authResponseFrameIndex = 0
+        authRequestCompleteSentAtMonotonicMilliseconds = nil
+        authConsentDeadline = nil
+        authResponseDeadline = nil
+        authResponseDecision = nil
+        authSignedExpiryMonotonicMilliseconds = nil
         authVerifiedRequest = nil
         authPhase = nil
         consentPresentation = nil
-        if !preserveAuthCredentials { authCredentials = nil }
+        if !preserveAuthCredentials {
+            authCredentials = nil
+            clearTemporaryResearchEnrollment(message: "Research session ended; ephemeral test credentials were cleared.")
+            authReplayGuard = WatchAuthReplayGuard()
+        }
+    }
+
+    private func finishAuthenticatedTransport(state terminalState: GattResearchState, detail terminalDetail: String) {
+        let completedPeripheral = peripheral
+        clearProtocolState()
+        lifecycle.terminate()
+        state = terminalState
+        detail = terminalDetail
+        if let completedPeripheral {
+            central.cancelPeripheralConnection(completedPeripheral)
+        }
     }
 
     private func invalidateSession(keepPeripheral: Bool) {
@@ -531,7 +831,7 @@ extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
         guard central === self.central, state == .connecting, consume(.connect, peripheral: peripheral) else { return }
         watchdog?.cancel()
         state = .discovering
-        arm(seconds: 12, token: generation, message: "Service discovery timed out") { [weak self] in self?.fail("Service discovery timed out") }
+        arm(seconds: WatchAuthTransport.bleDiscoveryTimeoutSeconds, token: generation, message: "Service discovery timed out") { [weak self] in self?.fail("Service discovery timed out") }
         guard beginOperation(.services) else { return }
         let service = authCredentials == nil
             ? GattIdentifiers.service
@@ -679,12 +979,12 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                     guard let transferID = authTransferID, let owner = authOwner, var cursor = authReadCursor else {
                         throw WatchTransportError.incompleteTransfer
                     }
-                    try cursor.acknowledge(owner: owner, transferID: transferID, index: index, nowMilliseconds: currentMilliseconds)
+                    try cursor.acknowledge(owner: owner, transferID: transferID, index: index, nowMilliseconds: currentMonotonicMilliseconds)
                     authReadCursor = cursor
                     if index + 1 < authFrameCount {
                         try requestAuthFrame(index + 1)
                     } else {
-                        try cursor.complete(owner: owner, transferID: transferID, nowMilliseconds: currentMilliseconds)
+                        try cursor.complete(owner: owner, transferID: transferID, nowMilliseconds: currentMonotonicMilliseconds)
                         authReadCursor = cursor
                         try writeAuthCommand(.complete, characteristicUUID: WatchAuthTransport.requestControl, phase: .requestComplete)
                     }
@@ -695,13 +995,16 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                     authResponseFrameIndex += 1
                     try sendNextAuthResponseFrame()
                 case .responseComplete:
-                    clearProtocolState()
-                    state = .completedResearchDecision
-                    detail = "Signed research response sent with write-with-response. Linux verification and authorization were not inferred by the Watch."
+                    let decision = authResponseDecision ?? "unknown"
+                    finishAuthenticatedTransport(
+                        state: .completedResearchDecision,
+                        detail: "Signed research response sent: \(decision). This is transport-only; Linux verification and authorization were not inferred by the Watch."
+                    )
                 case .cancel:
-                    clearProtocolState()
-                    state = .cancelled
-                    detail = "P009 research session cancelled. No signed approval was sent."
+                    finishAuthenticatedTransport(
+                        state: .cancelled,
+                        detail: "P009 research session cancelled. No signed approval was sent."
+                    )
                 }
             } catch {
                 fail("P009 transport operation failed: \(error.localizedDescription)")

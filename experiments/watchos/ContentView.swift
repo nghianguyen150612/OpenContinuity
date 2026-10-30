@@ -4,50 +4,50 @@ struct ContentView: View {
     @ObservedObject var bluetooth: WatchBluetoothManager
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("OpenContinuity").font(.headline)
-                Text("Experimental BLE transport").font(.caption2).foregroundStyle(.secondary)
-                Text("Authenticated research: blocked")
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("OpenContinuity").font(.headline)
+                    Text("Experimental BLE transport").font(.caption2).foregroundStyle(.secondary)
+                    NavigationLink("Authenticated Research") {
+                        AuthenticatedResearchView(bluetooth: bluetooth)
+                    }
                     .font(.caption)
-                    .bold()
-                Text("The P009 client requires independently pinned test enrollments and a temporary Watch signing key injected in memory by a research harness. This app has no safe key provisioning flow; no authenticated scan or consent prompt is available from this screen.")
-                    .font(.caption2)
-                    .fixedSize(horizontal: false, vertical: true)
-                Label(bluetooth.bluetoothState, systemImage: "dot.radiowaves.left.and.right")
-                    .font(.caption)
-                Text("Stage: \(bluetooth.state.title)").font(.caption).bold()
-                Text("Peripheral: \(bluetooth.selectedName)").font(.caption2)
-                Text("Protocol: \(bluetooth.protocolVersion)").font(.caption2)
+                    Label(bluetooth.bluetoothState, systemImage: "dot.radiowaves.left.and.right")
+                        .font(.caption)
+                    Text("Stage: \(bluetooth.state.title)").font(.caption).bold()
+                    Text("Peripheral: \(bluetooth.selectedName)").font(.caption2)
+                    Text("Protocol: \(bluetooth.protocolVersion)").font(.caption2)
 
-                if bluetooth.state == .scanning {
-                    Button("Stop Scan") { bluetooth.stopScan() }
-                } else {
-                    Button("Start Scan") { bluetooth.startScan() }
-                        .disabled(bluetooth.bluetoothState != "Bluetooth On" || !bluetooth.canStartScan)
-                }
+                    if bluetooth.state == .scanning {
+                        Button("Stop Scan") { bluetooth.stopScan() }
+                    } else {
+                        Button("Start Synthetic Scan") { bluetooth.startScan() }
+                            .disabled(bluetooth.bluetoothState != "Bluetooth On" || !bluetooth.canStartScan)
+                    }
 
-                ForEach(bluetooth.peripherals) { item in
-                    Button("Connect: \(item.name)") { bluetooth.connect(item) }
-                        .font(.caption2)
-                }
+                    ForEach(bluetooth.peripherals) { item in
+                        Button("Connect: \(item.name)") { bluetooth.connect(item) }
+                            .font(.caption2)
+                    }
 
-                if bluetooth.state == .ready {
-                    Button("Run Synthetic Test") { bluetooth.runTest() }
-                }
-                if bluetooth.state == .sendingFrames {
-                    Button("Cancel Test") { bluetooth.cancelTest() }
-                }
-                if bluetooth.selectedName != "None" {
-                    Button("Disconnect") { bluetooth.disconnect() }
-                        .tint(.red)
-                }
+                    if bluetooth.state == .ready {
+                        Button("Run Synthetic Test") { bluetooth.runTest() }
+                    }
+                    if bluetooth.state == .sendingFrames {
+                        Button("Cancel Test") { bluetooth.cancelTest() }
+                    }
+                    if bluetooth.selectedName != "None" {
+                        Button("Disconnect") { bluetooth.disconnect() }
+                            .tint(.red)
+                    }
 
-                Text(bluetooth.detail).font(.caption2).fixedSize(horizontal: false, vertical: true)
-                Text("Neither synthetic transport nor a signed P009 research response authorizes or unlocks Linux.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    Text(bluetooth.detail).font(.caption2).fixedSize(horizontal: false, vertical: true)
+                    Text("Neither synthetic transport nor a signed research response authorizes or unlocks Linux.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding()
             }
-            .padding()
         }
         .sheet(item: $bluetooth.consentPresentation) { presentation in
             ResearchConsentView(

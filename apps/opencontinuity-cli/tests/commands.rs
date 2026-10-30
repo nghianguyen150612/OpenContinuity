@@ -114,6 +114,10 @@ fn authenticated_gatt_command_caps_runtime_to_the_signed_request_lifetime() {
             "/does/not/read/p009-enrollments.json",
             "--host-key-file",
             "/does/not/read/p009-host-key",
+            "--confirm-host-sha256",
+            &"0".repeat(64),
+            "--confirm-watch-sha256",
+            &"0".repeat(64),
             "--experimental",
         ])
         .output()
@@ -123,6 +127,33 @@ fn authenticated_gatt_command_caps_runtime_to_the_signed_request_lifetime() {
         String::from_utf8_lossy(&result.stderr)
             .contains("must not exceed the 60-second P008 request lifetime")
     );
+}
+
+#[test]
+fn authenticated_gatt_command_requires_both_key_fingerprint_confirmations() {
+    let result = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args([
+            "research",
+            "watch-auth-gatt",
+            "serve",
+            "--adapter",
+            "hci0",
+            "--duration-seconds",
+            "10",
+            "--enrollments",
+            "/does/not/read/p009-enrollments.json",
+            "--host-key-file",
+            "/does/not/read/p009-host-key",
+            "--experimental",
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("requires exact host and Watch SHA-256 fingerprint confirmations")
+    );
+    assert!(result.stdout.is_empty());
 }
 
 fn hex_decode_len(value: &str) -> usize {

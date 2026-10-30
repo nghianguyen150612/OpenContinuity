@@ -701,6 +701,8 @@ dependencies = [
  "async-io",
  "ctrlc",
  "futures-lite",
+ "getrandom 0.2.17",
+ "libc",
  "opencontinuity-core",
  "p256",
  "serde",

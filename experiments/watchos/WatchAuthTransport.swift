@@ -17,7 +17,15 @@ public enum WatchAuthTransport {
     public static let minimumATTMTU = 23
     public static let maximumATTMTU = 517
     public static let maximumFrameCount = 218
-    public static let transferTimeoutMilliseconds: UInt64 = 30_000
+    public static let requestTransferTimeoutMilliseconds: UInt64 = 20_000
+    public static let responseTransferTimeoutMilliseconds: UInt64 = 15_000
+    public static let bleInactivityTimeoutMilliseconds: UInt64 = 8_000
+    public static let waitingForConsentTimeoutMilliseconds: UInt64 = 25_000
+    public static let bleClientScanTimeoutSeconds: UInt64 = 15
+    public static let bleConnectTimeoutSeconds: UInt64 = 15
+    public static let bleDiscoveryTimeoutSeconds: UInt64 = 12
+    public static let bleCallbackTimeoutSeconds: UInt64 = 8
+    public static let transferTimeoutMilliseconds = requestTransferTimeoutMilliseconds
     fileprivate static let magic: [UInt8] = [0x4f, 0x41]
     fileprivate static let startFlag: UInt8 = 0x01
     fileprivate static let endFlag: UInt8 = 0x02
@@ -32,8 +40,29 @@ public enum WatchTransportError: Error, Equatable {
     case invalidATTMTU, frameTooLarge, malformed, versionMismatch, directionMismatch
     case sessionMismatch, ownerMismatch, duplicateOrOutOfOrder, startRequired
     case messageInProgress, messageTooLarge, invalidEnvelope, lengthMismatch
-    case transferExpired, incompleteTransfer, alreadyCompleted, duplicateCompletion
+    case transferExpired, inactivityExpired, incompleteTransfer, alreadyCompleted, duplicateCompletion
     case cancelled, invalidChunkCommand
+}
+
+public struct WatchAuthMonotonicDeadline: Equatable {
+    public let deadlineMilliseconds: UInt64
+
+    public init(
+        startedAtMilliseconds: UInt64,
+        timeoutMilliseconds: UInt64,
+        hardDeadlineMilliseconds: UInt64
+    ) {
+        let (candidate, overflow) = startedAtMilliseconds.addingReportingOverflow(timeoutMilliseconds)
+        deadlineMilliseconds = min(overflow ? UInt64.max : candidate, hardDeadlineMilliseconds)
+    }
+
+    public func isActive(atMilliseconds now: UInt64) -> Bool {
+        now < deadlineMilliseconds
+    }
+
+    public func remainingMilliseconds(atMilliseconds now: UInt64) -> UInt64 {
+        deadlineMilliseconds > now ? deadlineMilliseconds - now : 0
+    }
 }
 
 public struct WatchSignedEnvelope: Equatable {
@@ -162,6 +191,7 @@ public struct WatchTransferAssembler {
     private var totalLength: Int?
     private var bytes = [UInt8]()
     private let createdAtMilliseconds: UInt64
+    private var lastActivityMilliseconds: UInt64
     private var byteComplete = false
     private var committed = false
     private var cancelled = false
@@ -172,6 +202,7 @@ public struct WatchTransferAssembler {
         self.direction = direction
         self.owner = owner
         self.createdAtMilliseconds = createdAtMilliseconds
+        self.lastActivityMilliseconds = createdAtMilliseconds
     }
 
     public mutating func push(
@@ -227,6 +258,7 @@ public struct WatchTransferAssembler {
             _ = try WatchSignedEnvelope(direction: direction, bytes: Data(bytes))
             byteComplete = true
         }
+        lastActivityMilliseconds = nowMilliseconds
     }
 
     public mutating func complete(owner: String, transferID: Data, nowMilliseconds: UInt64) throws -> WatchSignedEnvelope {
@@ -252,8 +284,12 @@ public struct WatchTransferAssembler {
         if cancelled { throw WatchTransportError.cancelled }
         if committed { throw WatchTransportError.alreadyCompleted }
         if nowMilliseconds >= createdAtMilliseconds,
-           nowMilliseconds - createdAtMilliseconds > WatchAuthTransport.transferTimeoutMilliseconds {
+           nowMilliseconds - createdAtMilliseconds >= WatchAuthTransport.requestTransferTimeoutMilliseconds {
             throw WatchTransportError.transferExpired
+        }
+        if nowMilliseconds >= lastActivityMilliseconds,
+           nowMilliseconds - lastActivityMilliseconds >= WatchAuthTransport.bleInactivityTimeoutMilliseconds {
+            throw WatchTransportError.inactivityExpired
         }
     }
 }
@@ -267,6 +303,7 @@ public struct WatchRequestReadCursor {
     private var requestedIndex: Int?
     private var readCompleted = false
     private let startedAtMilliseconds: UInt64
+    private var lastActivityMilliseconds: UInt64
     private let totalFrameCount: Int
     private var completed = false
     private var cancelled = false
@@ -280,6 +317,7 @@ public struct WatchRequestReadCursor {
         self.owner = owner
         self.totalFrameCount = totalFrameCount
         self.startedAtMilliseconds = nowMilliseconds
+        self.lastActivityMilliseconds = nowMilliseconds
     }
 
     public mutating func requested(owner: String, transferID: Data, index: Int, nowMilliseconds: UInt64) throws {
@@ -289,12 +327,14 @@ public struct WatchRequestReadCursor {
         }
         if let requestedIndex, requestedIndex != index { throw WatchTransportError.duplicateOrOutOfOrder }
         requestedIndex = index
+        lastActivityMilliseconds = nowMilliseconds
     }
 
     public mutating func didRead(owner: String, transferID: Data, index: Int, nowMilliseconds: UInt64) throws {
         try check(owner: owner, transferID: transferID, nowMilliseconds: nowMilliseconds)
         guard requestedIndex == index, nextIndex == index else { throw WatchTransportError.duplicateOrOutOfOrder }
         readCompleted = true
+        lastActivityMilliseconds = nowMilliseconds
     }
 
     public mutating func acknowledge(owner: String, transferID: Data, index: Int, nowMilliseconds: UInt64) throws {
@@ -303,6 +343,7 @@ public struct WatchRequestReadCursor {
         nextIndex += 1
         requestedIndex = nil
         readCompleted = false
+        lastActivityMilliseconds = nowMilliseconds
     }
 
     public mutating func complete(owner: String, transferID: Data, nowMilliseconds: UInt64) throws {
@@ -327,8 +368,12 @@ public struct WatchRequestReadCursor {
         if cancelled { throw WatchTransportError.cancelled }
         if completed { throw WatchTransportError.alreadyCompleted }
         if nowMilliseconds >= startedAtMilliseconds,
-           nowMilliseconds - startedAtMilliseconds > WatchAuthTransport.transferTimeoutMilliseconds {
+           nowMilliseconds - startedAtMilliseconds >= WatchAuthTransport.requestTransferTimeoutMilliseconds {
             throw WatchTransportError.transferExpired
+        }
+        if nowMilliseconds >= lastActivityMilliseconds,
+           nowMilliseconds - lastActivityMilliseconds >= WatchAuthTransport.bleInactivityTimeoutMilliseconds {
+            throw WatchTransportError.inactivityExpired
         }
     }
 }
