@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
     const auto mode = qEnvironmentVariable("OC_DISCOVERY_MODE", "sample");
     if (mode == "invalid") { std::fputs("{invalid}\n", stdout); return 0; }
     if (mode == "truncated") { std::fputs("{\"schema_version\":1", stdout); return 0; }
-    if (mode == "invalid_utf8") { const char bytes[] = {'{', '"', 0xff, '"', '}', '\n'}; std::fwrite(bytes, 1, sizeof(bytes), stdout); return 0; }
+    if (mode == "invalid_utf8") { const char bytes[] = {'{', '"', static_cast<char>(0xff), '"', '}', '\n'}; std::fwrite(bytes, 1, sizeof(bytes), stdout); return 0; }
     if (mode == "oversized") { const QByteArray bytes(700 * 1024, 'x'); std::fwrite(bytes.data(), 1, bytes.size(), stdout); return 0; }
     if (mode == "stderr") std::fputs("unexpected private diagnostic", stderr);
     const QString sessionId = "0123456789abcdef0123456789abcdef";
