@@ -77,7 +77,7 @@ ScrollView {
                       deviceInventory.state === "idle" ? "Not refreshed. No Bluetooth scan has been performed." :
                       deviceInventory.state === "stale" ? "Stale snapshot. " + deviceInventory.lastError :
                       deviceInventory.state === "loaded" && deviceInventory.devices.count === 0 ? "No known devices in this BlueZ snapshot." :
-                      deviceInventory.state === "loaded" ? "Snapshot ready." :
+                      deviceInventory.state === "loaded" ? "BlueZ known-device snapshot ready." :
                       deviceInventory.state === "cli_unavailable" ? "CLI unavailable. Install opencontinuity beside this app or launch with --cli /absolute/path/opencontinuity." :
                       deviceInventory.lastError
             }
