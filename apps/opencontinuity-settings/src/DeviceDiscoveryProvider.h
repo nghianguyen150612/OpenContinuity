@@ -1,5 +1,6 @@
 #pragma once
 #include "DeviceDiscoveryModel.h"
+#include "DeviceDiscoveryReport.h"
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QProcess>
@@ -36,6 +37,7 @@ signals:
 private:
   bool current(QProcess *p, quint64 g) const;
   void read(QProcess *p, quint64 g, bool error);
+  void complete(QProcess *p, quint64 g, int code, QProcess::ExitStatus exit);
   void reject(const QString &message);
   void retire();
   Options m_options;
@@ -44,7 +46,9 @@ private:
   QTimer m_deadline, m_fallback, m_progress, m_age;
   QElapsedTimer m_elapsed;
   quint64 m_generation = 0;
-  QByteArray m_stdout, m_stderr;
+  QByteArray m_lineBuffer, m_stderr;
+  qsizetype m_totalOutputBytes = 0;
+  DeviceDiscoveryReport m_report;
   QString m_state = "idle", m_message = "No scan requested.", m_cleanup = "not_needed";
   QString m_failure;
   bool m_cancelling = false, m_durationKnown = false;

@@ -76,7 +76,10 @@ objects/16 adapters; event bodies at 64 KiB; input names at 4 KiB. These are
 application parsing limits, not a whole-process memory quota against a hostile
 local bus. See the [security review](P013_DISCOVERY_SECURITY_REVIEW.md).
 
-Qt validates exact members, duplicate members (including escaped equivalents),
-types, enums, ranges, state consistency, ephemeral IDs, provenance and sanitized
-names. It rejects unknown schema, malformed/truncated/oversized output, stderr
-and exit/schema mismatches. Settings always requests and validates 10 seconds.
+P013 CLI consumers of this one-shot format can validate exact members, duplicate
+members (including escaped equivalents), types, enums, ranges, state consistency,
+ephemeral IDs, provenance and sanitized names. Settings uses the separate P014
+JSONL stream while preserving the same P013 BlueZ lifecycle and terminal outcome;
+see [P014 protocol](P014_DISCOVERY_STREAM_PROTOCOL.md) and [live UI](P014_SETTINGS_LIVE_SCAN_UI.md).
+Settings still requests a fixed 10-second scan and rejects malformed/truncated/
+oversized output, unexpected stderr, and terminal/exit mismatches.

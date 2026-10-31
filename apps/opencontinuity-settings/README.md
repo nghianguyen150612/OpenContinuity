@@ -20,7 +20,7 @@ The last command opens a desktop window. In a headless environment, use the
 smoke tests instead. CLI lookup defaults to `opencontinuity` in the Settings
 executable's own directory, never the current directory or PATH. `--cli` accepts
 one trusted absolute executable path; it receives only fixed `doctor --json` or
-`devices list --json`, or explicit `devices discover --seconds 10 --json` arguments.
+`devices list --json`, or explicit `devices discover --seconds 10 --events-jsonl` arguments.
 A missing CLI still leaves every page navigable with an explanatory error.
 Doctor refresh is manual (Ctrl+R), asynchronous, limited to three seconds, and never
 performs Bluetooth discovery. Device snapshots are refreshed only by the
@@ -67,3 +67,21 @@ See [UI behavior](../../docs/research/P013_SETTINGS_SCAN_UI.md),
 [validation](../../docs/P013_VALIDATION.md). CTest includes a private native CLI
 fixture for discovery parser/process/model tests and real QML Scan/Cancel clicks.
 Tests never require Bluetooth hardware. Physical Arch testing remains NOT RUN.
+
+## P014 live scan output
+
+The active scan consumes versioned JSONL events as the CLI produces them.
+**Unverified BlueZ observations** shows new observations and name updates before
+the terminal report, with a unique count, elapsed time, Cancel, source/trust
+labels, empty state, and cleanup outcome. The provider validates line sizes,
+UTF-8/JSON, exact fields, event order, ephemeral session IDs, sequence numbers,
+row counts, terminal cleanup, and process exit agreement. It marks rows stale
+when cancellation, malformed output, timeout, crash, forced kill, or cleanup
+failure prevents confirmation. The P012 known-device snapshot remains a
+separate list and refresh button.
+
+See [stream protocol](../../docs/research/P014_DISCOVERY_STREAM_PROTOCOL.md),
+[lifecycle and backpressure](../../docs/research/P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md),
+[live UI behavior](../../docs/research/P014_SETTINGS_LIVE_SCAN_UI.md), and
+[validation](../../docs/P014_VALIDATION.md). Software fixtures do not establish
+Arch RF behavior or Watch SE 2 interoperability.
