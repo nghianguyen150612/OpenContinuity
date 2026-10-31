@@ -67,8 +67,9 @@ wire formats and the 60-second signed bound remain unchanged. No Linux authoriza
 
 A real `opencontinuity-settings` Qt 6/QML desktop application now provides Overview,
 Devices, Apple Watch, AirDrop, AirPods, Continuity, Research Lab / Diagnostics and
-About pages. The C++20 backend runs only the static `opencontinuity doctor --json`
-command asynchronously with strict schema/size/deadline validation. Unsupported
+About pages. P011 introduced an asynchronous C++20 bridge for static `opencontinuity doctor --json`
+with strict schema/size/deadline validation; P012 inventory and P013 discovery
+use separate providers. Unsupported
 features remain unsupported; no devices, battery readings, transfers or unlock are
 invented. The Devices page now provides manual BlueZ known-device snapshots; it
 keeps that read-only inventory independent from P013 opt-in discovery. No enabled protocol toggles, daemon control or

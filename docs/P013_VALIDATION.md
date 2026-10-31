@@ -58,9 +58,10 @@ The existing workflow retains all Rust/Python, Qt, Swift codec/lifecycle,
 Rust→Swift→Rust, CryptoKit→Rust, unsigned watchOS compilation and artifact
 packaging steps. Discovery tests run without Bluetooth hardware.
 
-Final-head CI is pending at the initial implementation commit. The delivery
-report and Draft PR Checks must identify the exact checked head and final run;
-a green P012 baseline or earlier P013 head does not establish final-head success.
+The exact checked head, final run URL and conclusions are recorded in
+[Draft PR #14](https://github.com/nghianguyen150612/OpenContinuity/pull/14) and the
+delivery report. Consult its current Checks for the final commit; a green P012
+baseline or earlier P013 head does not establish final-head success.
 [Branch runs](https://github.com/nghianguyen150612/OpenContinuity/actions?query=branch%3Afeat%2Fp013-opt-in-bluetooth-discovery).
 
 ## Physical evidence and merge boundary

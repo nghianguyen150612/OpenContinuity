@@ -16,7 +16,8 @@ Scan is disabled while running and Cancel is disabled while cleanup is pending.
 
 Elapsed progress includes adapter setup until the final report is available;
 the UI does not invent a radio-start event. The validated final report gives
-actual observation duration. Empty completion displays `No observations`, while
+actual observation duration. A missing or invalid final report leaves observation
+duration explicitly unavailable; elapsed process time is not substituted. Empty completion displays `No observations`, while
 adapter/power/permission/LE-support/bus failures remain distinct. Cleanup
 incomplete is a separate visible warning. Partial and previous results are
 marked stale on a new attempt/cancellation/failure and after one minute. There

@@ -380,7 +380,13 @@ mod linux {
                 Some(crate::radio_guard::acquire(&self.path).map_err(|_| Status::AdapterBusy)?);
             // Never infer ownership from Adapter1.Discovering (shared across clients).
             let reply = self.call("GetDiscoveryFilters", &()).await?;
+            if reply.body().len() > 4096 {
+                return Err(Status::DataLimit);
+            }
             let filters: Vec<String> = reply.body().deserialize().map_err(classify)?;
+            if filters.len() > 32 {
+                return Err(Status::DataLimit);
+            }
             if !filters.iter().any(|f| f == "Transport") {
                 return Err(Status::UnsupportedLe);
             }
@@ -392,7 +398,10 @@ mod linux {
                 "SetDiscoveryFilter",
                 &(HashMap::from([("Transport", Value::from("le"))]),),
             )
-            .await?;
+            .await?
+            .body()
+            .deserialize::<()>()
+            .map_err(classify)?;
             self.ownership.start_attempted = true;
             let reply = match self.call("StartDiscovery", &()).await {
                 Ok(reply) => reply,
@@ -484,6 +493,7 @@ mod linux {
                         .await
                 })
                 .await
+                .and_then(|reply| reply.body().deserialize::<()>().map_err(classify))
                 .is_ok();
             } else if self.ownership.start_attempted {
                 // Start may have taken effect despite a lost reply; disconnect is the fallback.
@@ -502,6 +512,7 @@ mod linux {
                     .await
             })
             .await
+            .and_then(|reply| reply.body().deserialize::<()>().map_err(classify))
             .is_ok();
             if ok {
                 Cleanup::Complete

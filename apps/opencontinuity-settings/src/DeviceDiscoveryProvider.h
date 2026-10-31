@@ -13,6 +13,7 @@ class DeviceDiscoveryProvider final : public QObject {
   Q_PROPERTY(QString message READ message NOTIFY changed)
   Q_PROPERTY(QString cleanupStatus READ cleanupStatus NOTIFY changed)
   Q_PROPERTY(double elapsedSeconds READ elapsedSeconds NOTIFY changed)
+  Q_PROPERTY(bool durationKnown READ durationKnown NOTIFY changed)
   Q_PROPERTY(int requestedSeconds READ requestedSeconds CONSTANT)
 public:
   struct Options { QString executable; int timeoutMs = 22000; int cancelGraceMs = 6500; };
@@ -25,6 +26,7 @@ public:
   QString message() const { return m_message; }
   QString cleanupStatus() const { return m_cleanup; }
   double elapsedSeconds() const;
+  bool durationKnown() const { return m_durationKnown; }
   int requestedSeconds() const { return 10; }
   Q_INVOKABLE void scan();
   Q_INVOKABLE void cancel();
@@ -45,6 +47,6 @@ private:
   QByteArray m_stdout, m_stderr;
   QString m_state = "idle", m_message = "No scan requested.", m_cleanup = "not_needed";
   QString m_failure;
-  bool m_cancelling = false;
+  bool m_cancelling = false, m_durationKnown = false;
   double m_actualSeconds = 0;
 };

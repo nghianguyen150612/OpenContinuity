@@ -22,7 +22,7 @@ executable's own directory, never the current directory or PATH. `--cli` accepts
 one trusted absolute executable path; it receives only fixed `doctor --json` or
 `devices list --json`, or explicit `devices discover --seconds 10 --json` arguments.
 A missing CLI still leaves every page navigable with an explanatory error.
-Refresh is manual (Ctrl+R), asynchronous, limited to three seconds, and never
+Doctor refresh is manual (Ctrl+R), asynchronous, limited to three seconds, and never
 performs Bluetooth discovery. Device snapshots are refreshed only by the
 Devices button and stale rows are labeled.
 

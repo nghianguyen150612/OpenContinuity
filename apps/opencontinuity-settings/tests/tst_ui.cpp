@@ -146,12 +146,14 @@ private slots:
     if (!unavailable && discoveryOutcome == "sample") QCOMPARE(discovery.devices()->count(),1);
     if (!unavailable && discoveryOutcome == "cleanup_incomplete") QVERIFY(window->findChild<QQuickItem *>("discoveryCleanup")->isVisible());
     if (!unavailable) {
+      QTest::qWait(50); // Allow Controls/layout bindings to settle before another click.
       qputenv("OC_DISCOVERY_MODE", "cancel");
       QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, scan->mapToScene(QPointF(scan->width()/2,scan->height()/2)).toPoint());
       QTRY_VERIFY(discovery.scanning()); QTest::qWait(100);
       auto *cancel = window->findChild<QQuickItem *>("cancelBluetoothScan"); QVERIFY(cancel); QVERIFY(cancel->isVisible());
       QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, cancel->mapToScene(QPointF(cancel->width()/2,cancel->height()/2)).toPoint());
       QTRY_COMPARE(discovery.state(), "cancelled"); QCOMPARE(discovery.cleanupStatus(), "complete");
+      QTest::qWait(50);
       // Leaving Devices requests cleanup without restarting discovery on return.
       QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, scan->mapToScene(QPointF(scan->width()/2,scan->height()/2)).toPoint());
       QTRY_VERIFY(discovery.scanning()); QTest::qWait(100);

@@ -69,7 +69,7 @@ void DeviceDiscoveryProvider::read(QProcess *p, quint64 g, bool error) {
 }
 void DeviceDiscoveryProvider::scan() {
   if (scanning()) return;
-  m_age.stop(); m_devices.markStale();
+  m_age.stop(); m_devices.markStale(); m_durationKnown = false;
   const QFileInfo file(m_options.executable);
   if (!file.isAbsolute() || !file.isFile() || !file.isExecutable()) {
     m_state = "cli_unavailable"; m_message = "CLI unavailable. Install opencontinuity beside this app or use --cli /absolute/path/opencontinuity."; emit changed(); return;
@@ -98,7 +98,7 @@ void DeviceDiscoveryProvider::scan() {
     if (!valid || !failure.isEmpty()) {
       reject(failure.isEmpty() ? "CLI returned an invalid scan report. Cleanup is uncertain." : failure + " Cleanup is uncertain."); return;
     }
-    m_devices.replace(parsed->devices); m_state = parsed->status; m_cleanup = parsed->cleanup; m_actualSeconds = parsed->actualMs / 1000.0;
+    m_devices.replace(parsed->devices); m_state = parsed->status; m_cleanup = parsed->cleanup; m_actualSeconds = parsed->actualMs / 1000.0; m_durationKnown = true;
     m_message = outcome(parsed->status, parsed->devices.isEmpty());
     if (!parsed->completed) m_devices.markStale();
     m_age.start(60000); emit changed();

@@ -73,7 +73,7 @@ ScrollView {
             }
             BusyIndicator { visible: deviceDiscovery.scanning; running: visible; implicitWidth: 28; implicitHeight: 28 }
             Label { objectName: "discoveryStatus"; text: deviceDiscovery.message; textFormat: Text.PlainText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-            Label { text: "Duration: " + deviceDiscovery.requestedSeconds + " seconds requested · " + deviceDiscovery.elapsedSeconds.toFixed(1) + " seconds " + (deviceDiscovery.scanning ? "elapsed (including setup)" : "of observation"); wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            Label { text: "Duration: " + deviceDiscovery.requestedSeconds + " seconds requested · " + (deviceDiscovery.scanning ? deviceDiscovery.elapsedSeconds.toFixed(1) + " seconds elapsed (including setup)" : deviceDiscovery.durationKnown ? deviceDiscovery.elapsedSeconds.toFixed(1) + " seconds of reported observation" : "observation duration unavailable"); wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Label { objectName: "discoveryCleanup"; visible: deviceDiscovery.cleanupStatus === "incomplete"; text: "Cleanup warning: the owned session could not be confirmed released. D-Bus disconnect is the fallback; forced termination cannot confirm StopDiscovery."; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.weight: Font.Bold }
             Label { visible: deviceDiscovery.devices.stale; text: "Previous scan results (stale or partial)"; Layout.fillWidth: true; wrapMode: Text.WordWrap; font.weight: Font.DemiBold }
             Repeater {

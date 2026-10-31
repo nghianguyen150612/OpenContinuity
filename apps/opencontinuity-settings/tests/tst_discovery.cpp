@@ -43,10 +43,10 @@ private slots:
   }
   void malformedSchemas() { QFETCH(QByteArray,input); QVERIFY(!DeviceDiscoveryReport::parse(input)); }
   void noAutomaticScanAndOneProcess() {
-    DeviceDiscoveryProvider p({fixtureExecutable}); QCOMPARE(p.state(), "idle"); QVERIFY(!p.scanning());
+    DeviceDiscoveryProvider p({fixtureExecutable}); QCOMPARE(p.state(), "idle"); QVERIFY(!p.scanning()); QVERIFY(!p.durationKnown());
     QTest::qWait(150); QVERIFY(!p.scanning()); QCOMPARE(p.devices()->count(), 0);
     p.scan(); QVERIFY(p.scanning()); p.scan();
-    QTRY_COMPARE(p.state(), "completed"); QVERIFY(!p.scanning()); QCOMPARE(p.cleanupStatus(), "complete"); QCOMPARE(p.devices()->count(), 1);
+    QTRY_COMPARE(p.state(), "completed"); QVERIFY(!p.scanning()); QCOMPARE(p.cleanupStatus(), "complete"); QCOMPARE(p.devices()->count(), 1); QVERIFY(p.durationKnown());
   }
   void cancellationWaitsForFinalReportAndPreviousResultsAreStale() {
     DeviceDiscoveryProvider p({fixtureExecutable}); p.scan(); QTRY_COMPARE(p.state(), "completed");
@@ -67,12 +67,12 @@ private slots:
   }
   void rejectsProcessOutput_data() { QTest::addColumn<QString>("mode"); for (const auto &m : {"invalid","oversized","stderr"}) QTest::newRow(m) << QString(m); }
   void rejectsProcessOutput() {
-    QFETCH(QString,mode); qputenv("OC_DISCOVERY_MODE",mode.toUtf8()); DeviceDiscoveryProvider p({fixtureExecutable}); p.scan(); QTRY_VERIFY(!p.scanning()); QCOMPARE(p.state(),"failed"); QCOMPARE(p.cleanupStatus(),"incomplete");
+    QFETCH(QString,mode); qputenv("OC_DISCOVERY_MODE",mode.toUtf8()); DeviceDiscoveryProvider p({fixtureExecutable}); p.scan(); QTRY_VERIFY(!p.scanning()); QCOMPARE(p.state(),"failed"); QCOMPARE(p.cleanupStatus(),"incomplete"); QVERIFY(!p.durationKnown());
   }
   void missingExecutable() { DeviceDiscoveryProvider p({"relative-cli"}); p.scan(); QCOMPARE(p.state(),"cli_unavailable"); QVERIFY(!p.scanning()); }
   void timeoutAndForcedTerminationAreUncertain() {
     qputenv("OC_DISCOVERY_MODE","hang"); DeviceDiscoveryProvider p({fixtureExecutable, 250, 100});
-    p.scan(); QTRY_VERIFY(!p.scanning()); QCOMPARE(p.state(),"failed"); QCOMPARE(p.cleanupStatus(),"incomplete");
+    p.scan(); QTRY_VERIFY(!p.scanning()); QCOMPARE(p.state(),"failed"); QCOMPARE(p.cleanupStatus(),"incomplete"); QVERIFY(!p.durationKnown());
     qputenv("OC_DISCOVERY_MODE","sample"); p.scan(); QTRY_COMPARE(p.state(),"completed"); QTest::qWait(250); QCOMPARE(p.state(),"completed");
   }
   void shutdownRequestsCleanup() {
