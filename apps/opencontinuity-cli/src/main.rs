@@ -44,6 +44,7 @@ const HELP: &str = concat!(
     "       opencontinuity research watch-ble --capabilities [--json]\n",
     "       opencontinuity devices list --json\n",
     "       opencontinuity devices discover [--seconds 10] [--adapter-index 1] --json\n",
+    "       opencontinuity devices discover [--seconds 10] [--adapter-index 1] --events-jsonl\n",
     "       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\n",
     "Commands:\n",
     "  doctor         Report this build's capability states without scanning devices\n",
@@ -120,11 +121,18 @@ fn run_devices(args: Vec<String>) -> ExitCode {
         let Ok(options) = device_discovery::Options::parse(&args[1..]) else {
             return usage_error();
         };
-        let report = device_discovery::run(options);
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).expect("bounded discovery report serializes")
-        );
+        let report = match options.output {
+            device_discovery::OutputMode::Json => {
+                let report = device_discovery::run(options);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .expect("bounded discovery report serializes")
+                );
+                report
+            }
+            device_discovery::OutputMode::EventsJsonl => device_discovery::run_events(options),
+        };
         return if report.status == device_discovery::Status::Completed {
             ExitCode::SUCCESS
         } else {

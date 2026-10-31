@@ -38,6 +38,7 @@ States include the P011 provisional Settings foundation; earlier research rows r
 | BlueZ known-device snapshot | supported | P012 `devices list --json` reads one ObjectManager snapshot without discovery; versioned, bounded output and explicit error states. Device names are local display data. No Apple identity or authorization claim. |
 | Settings Devices inventory | supported | Manual refresh through a bounded asynchronous C++ provider and validated list model. No startup scan, connect, pair, forget or Apple protocol action. |
 | Explicit bounded Bluetooth LE discovery | implemented; physical NOT RUN | P013 CLI 1–30 seconds and native Settings Scan/Cancel; BlueZ event provenance, owned cleanup and no automatic scans. [Validation](P013_VALIDATION.md). |
+| Live Bluetooth LE discovery stream | implemented; final CI pending | P014 `--events-jsonl` and incremental Settings model updates reuse the P013 owned session. P012 inventory stays separate; output backpressure and terminal cleanup are bounded. No physical RF evidence. [Validation](P014_VALIDATION.md). |
 
 Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No native Apple protocol or production authentication feature is implemented.
 

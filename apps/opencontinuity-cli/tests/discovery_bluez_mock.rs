@@ -2,7 +2,8 @@
 //! Real zbus 5.12 calls on private dbus-daemon instances, never Bluetooth hardware.
 use std::{
     collections::{HashMap, HashSet},
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
+    os::fd::AsRawFd,
     process::{Child, Command, Output, Stdio},
     sync::{Arc, Mutex},
     thread,
@@ -172,6 +173,21 @@ impl Bus {
             .spawn()
             .unwrap()
     }
+    fn spawn_events(&self, seconds: &str) -> Child {
+        Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+            .args([
+                "devices",
+                "discover",
+                "--seconds",
+                seconds,
+                "--events-jsonl",
+            ])
+            .env("DBUS_SYSTEM_BUS_ADDRESS", &self.address)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
     fn wait_started(&self, child: &mut Child) {
         let end = Instant::now() + Duration::from_secs(5);
         while !self
@@ -280,6 +296,178 @@ fn owned_le_session_filters_events_deduplicates_and_ignores_cached_objects() {
     assert_eq!(r["devices"].as_array().unwrap().len(), 1);
     assert_eq!(r["devices"][0]["display_name"], "Watch");
     assert!(r["actual_duration_ms"].as_u64().unwrap() >= 1000);
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+}
+
+#[test]
+fn jsonl_stream_uses_one_owned_session_and_reports_updates_in_sequence() {
+    let bus = Bus::new("normal");
+    let mut child = bus.spawn_events("1");
+    bus.wait_started(&mut child);
+    bus.event(
+        "/org/bluez/hci0/dev_STREAM",
+        "org.bluez.Device1",
+        Some("Unverified watch"),
+        true,
+    );
+    thread::sleep(Duration::from_millis(60));
+    bus.event(
+        "/org/bluez/hci0/dev_STREAM",
+        "org.bluez.Device1",
+        Some("Renamed watch"),
+        true,
+    );
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 4, "{text}");
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event["sequence"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 4]
+    );
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["session", "device", "device", "terminal"]
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["source"] == "bluez_le_discovery_events")
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["authorization"] == "never_evaluated")
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["scan_session_id"] == events[0]["scan_session_id"])
+    );
+    assert_eq!(events[1]["change"], "observed");
+    assert_eq!(events[2]["change"], "updated");
+    assert_eq!(events[1]["id"], events[2]["id"]);
+    assert_eq!(events[2]["display_name"], "Renamed watch");
+    assert_eq!(events[3]["device_count"], 1);
+    assert_eq!(events[3]["device_event_count"], 2);
+    assert_eq!(events[3]["cleanup_status"], "complete");
+    assert!(!text.contains("/org/bluez/"));
+    assert!(!text.contains("AA:BB:CC:DD:EE:FF"));
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+}
+
+#[test]
+fn jsonl_sigterm_emits_cancelled_terminal_after_owned_cleanup() {
+    let bus = Bus::new("normal");
+    let mut child = bus.spawn_events("30");
+    bus.wait_started(&mut child);
+    bus.event(
+        "/org/bluez/hci0/dev_STREAM",
+        "org.bluez.Device1",
+        Some("Partial observation"),
+        true,
+    );
+    thread::sleep(Duration::from_millis(40));
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8(output.stdout).unwrap();
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let terminal = events.last().unwrap();
+    assert_eq!(terminal["type"], "terminal");
+    assert_eq!(terminal["status"], "cancelled");
+    assert_eq!(terminal["cleanup_status"], "complete");
+    assert_eq!(terminal["scan_completed"], false);
+    assert_eq!(terminal["device_count"], 1);
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+}
+
+#[test]
+fn closed_jsonl_consumer_still_releases_owned_discovery() {
+    let bus = Bus::new("normal");
+    let mut child = bus.spawn_events("30");
+    drop(child.stdout.take());
+    bus.wait_started(&mut child);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closed stdout must not hang BlueZ cleanup"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(status.code(), Some(1));
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+}
+
+#[test]
+fn blocked_jsonl_stdout_terminates_with_bounded_cleanup() {
+    let bus = Bus::new("normal");
+    let mut child = bus.spawn_events("30");
+    let capacity = unsafe {
+        libc::fcntl(
+            child.stdout.as_ref().unwrap().as_raw_fd(),
+            libc::F_SETPIPE_SZ,
+            4096,
+        )
+    };
+    assert!(capacity >= 4096, "test requires a bounded pipe buffer");
+    bus.wait_started(&mut child);
+    bus.event(
+        "/org/bluez/hci0/dev_BLOCKED",
+        "org.bluez.Device1",
+        Some("Seed"),
+        true,
+    );
+    thread::sleep(Duration::from_millis(40));
+    let began = Instant::now();
+    for index in 0..512 {
+        let label = format!("Device {index:03} {}", "x".repeat(60));
+        bus.event(
+            "/org/bluez/hci0/dev_BLOCKED",
+            "org.bluez.Device1",
+            Some(&label),
+            true,
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(1));
+    assert!(
+        began.elapsed() < Duration::from_secs(8),
+        "stdout backpressure must not hang the scan"
+    );
+    let mut partial = Vec::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut partial)
+        .unwrap();
+    assert!(partial.len() <= 512 * 1024);
+    let text = String::from_utf8_lossy(&partial);
+    assert!(!text.lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .is_some_and(|event| event["type"] == "terminal")
+    }));
     assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
 }
 #[test]

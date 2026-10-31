@@ -108,3 +108,20 @@ Disconnect is an uncertain-cleanup fallback, not proof that StopDiscovery ran.
 BlueZ events and attacker-controlled labels cannot establish RF proximity, Apple
 identity, wearer identity or authentication. No authorization consumer is added.
 See the [P013 security review](research/P013_DISCOVERY_SECURITY_REVIEW.md).
+
+## P014 live discovery stream
+
+The CLI adds a versioned JSONL presentation mode over the same P013 BlueZ
+connection, pinned owner, filter, StartDiscovery call, observation map, radio
+guard, and owned cleanup. A one-record writer queue, line/total/device/event
+caps, write deadlines, and terminal-after-cleanup ordering limit stdout
+backpressure. The Qt process bridge bounds buffers, validates every event and
+exit status, and treats missing/invalid terminals as uncertain cleanup. The
+live observation model is independent from the known-device inventory.
+
+The stream cannot turn BlueZ events into independent RF or proximity evidence.
+Device labels remain attacker-controlled personal data. Process/framework
+buffers are not a full memory sandbox, and forced death cannot prove explicit
+StopDiscovery. No pairing, connection, trust mutation, telemetry, authorization,
+or Apple identity is added. See the [P014 privacy/security review](research/P014_PRIVACY_SECURITY_REVIEW.md)
+and [lifecycle limits](research/P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md).

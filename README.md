@@ -69,7 +69,7 @@ A real `opencontinuity-settings` Qt 6/QML desktop application now provides Overv
 Devices, Apple Watch, AirDrop, AirPods, Continuity, Research Lab / Diagnostics and
 About pages. P011 introduced an asynchronous C++20 bridge for static `opencontinuity doctor --json`
 with strict schema/size/deadline validation; P012 inventory and P013 discovery
-use separate providers. Unsupported
+use separate providers; P014 makes only discovery live through JSONL streaming. Unsupported
 features remain unsupported; no devices, battery readings, transfers or unlock are
 invented. The Devices page now provides manual BlueZ known-device snapshots; it
 keeps that read-only inventory independent from P013 opt-in discovery. No enabled protocol toggles, daemon control or
@@ -104,5 +104,23 @@ data enter the report. Every report retains `authorization: never_evaluated`.
 See the [lifecycle](docs/research/P013_BLUEZ_DISCOVERY_LIFECYCLE.md),
 [schema](docs/research/P013_DISCOVERY_SCHEMA.md),
 [security review](docs/research/P013_DISCOVERY_SECURITY_REVIEW.md) and
-[validation](docs/P013_VALIDATION.md). Arch physical discovery is NOT RUN;
+[validation](docs/P013_VALIDATION.md).
+
+## P014 live discovery streaming (provisional)
+
+The CLI adds the separate `devices discover --events-jsonl` format while keeping
+P013 `--json` unchanged. Settings consumes the versioned event stream as it
+arrives and updates **Unverified BlueZ observations** live, including changed
+sanitized names, elapsed time, unique count, Cancel and validated cleanup
+outcome. A bounded writer stops safely on blocked output; the same P013 owner,
+filter, Start/Stop and connection lifecycle remains authoritative. Known-device
+inventory stays in its own P012 model. Scanning remains explicit and never starts
+on launch or navigation.
+
+See the [event protocol](docs/research/P014_DISCOVERY_STREAM_PROTOCOL.md),
+[lifecycle/backpressure design](docs/research/P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md),
+[Settings behavior](docs/research/P014_SETTINGS_LIVE_SCAN_UI.md),
+[privacy review](docs/research/P014_PRIVACY_SECURITY_REVIEW.md),
+[Arch physical plan](docs/research/P014_ARCH_PHYSICAL_PLAN.md), and
+[validation](docs/P014_VALIDATION.md). Physical Arch discovery is NOT RUN;
 Watch SE 2 qualification remains NO-GO. Native Apple features remain unsupported.
