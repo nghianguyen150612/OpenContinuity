@@ -128,6 +128,6 @@ private slots:
 
 int main(int argc, char **argv) {
   QCoreApplication app(argc, argv); if (argc < 2) return 2; fixtureExecutable = QString::fromLocal8Bit(argv[1]);
-  DiscoveryTest test; return QTest::qExec(&test, argc, argv);
+  DiscoveryTest test; return QTest::qExec(&test, 1, argv);
 }
 #include "tst_discovery.moc"
