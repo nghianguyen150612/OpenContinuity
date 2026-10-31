@@ -29,7 +29,7 @@ ScrollView {
         }
         Label {
             text: ["Your Apple ecosystem, with a clear view of what is available.",
-                   "Device discovery will appear here when an adapter is implemented.",
+                   "BlueZ known devices are shown only after an explicit read-only refresh.",
                    "Native Watch integration and its separate trust requirements.",
                    "File sharing through native Apple interoperability.",
                    "Headphone capabilities, without guessed device information.",
