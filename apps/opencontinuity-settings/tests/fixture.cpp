@@ -45,8 +45,15 @@ int main(int argc, char **argv) {
     std::fputs("<b>untrusted error</b>", stderr);
     return 7;
   }
-  if (mode == "crash")
+  if (mode == "crash") {
+#ifdef Q_OS_UNIX
+    // A non-core-dumping fatal signal still gives QProcess CrashExit, without
+    // waiting for an OS core collector before the parent can reap the child.
+    std::raise(SIGKILL);
+#else
     std::abort();
+#endif
+  }
   if (mode == "oversized") {
     const QByteArray large(20000, 'x');
     std::fwrite(large.data(), 1, large.size(), stdout);

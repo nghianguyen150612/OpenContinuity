@@ -12,7 +12,13 @@ Inspected final P012 head `3dc2f3459e826ef1a0bb9c84cae35e69f517fa3c`, not merely
 its merge commit. [CI run 41161372066](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/41161372066)
 completed **successfully**: Rust checks, Qt Settings, Swift tests, both Rust/Swift
 interoperability paths, unsigned watchOS build and development artifact upload.
-No inherited regression was found in those results.
+No inherited regression was found in those P012 results. A later P013 duplicate
+push run exposed the inherited Doctor crash-fixture race: `failure(crash)`
+reported `timed_out` instead of `process_error` under its 100 ms deadline. The
+fixture now uses a non-core-dumping fatal signal on Unix; only the dedicated
+timeout scenario keeps a 100 ms deadline. Other error-classification scenarios
+allow normal process startup/reaping time without accepting a timeout as success.
+Production Doctor behavior is unchanged. Final CI is checked again after this fix.
 
 ## Local software validation
 
