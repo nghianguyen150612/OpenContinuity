@@ -4,7 +4,7 @@
 namespace {
 constexpr qsizetype kMaxOutputBytes = 512 * 1024;
 constexpr qsizetype kMaxRecordBytes = 2 * 1024;
-constexpr qsizetype kReadBufferBytes = 8 * 1024;
+constexpr qsizetype kReadChunkBytes = 8 * 1024;
 
 QString outcome(const QString &status, bool empty) {
   if (status == "completed") return empty ? "Scan completed. No observations. This does not prove that no devices are in range." : "Scan completed. These are unverified BlueZ events, not authenticated device identities.";
@@ -96,7 +96,7 @@ void DeviceDiscoveryProvider::read(QProcess *process, quint64 generation, bool e
   }
 
   while (true) {
-    const auto bytes = process->read(kReadBufferBytes);
+    const auto bytes = process->read(kReadChunkBytes);
     if (bytes.isEmpty()) break;
     m_totalOutputBytes += bytes.size();
     if (m_totalOutputBytes > kMaxOutputBytes) {
@@ -168,7 +168,6 @@ void DeviceDiscoveryProvider::scan() {
   process->setProgram(file.absoluteFilePath());
   process->setArguments({"devices", "discover", "--seconds", "10", "--events-jsonl"});
   process->setProcessChannelMode(QProcess::SeparateChannels);
-  process->setReadBufferSize(kReadBufferBytes);
   connect(process, &QProcess::started, this, [this,process,generation] { if (current(process,generation) && m_cancelling) process->terminate(); });
   connect(process, &QProcess::readyReadStandardOutput, this, [this,process,generation] { read(process,generation,false); });
   connect(process, &QProcess::readyReadStandardError, this, [this,process,generation] { read(process,generation,true); });

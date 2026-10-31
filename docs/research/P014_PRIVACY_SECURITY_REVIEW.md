@@ -34,12 +34,13 @@ P013 cleanup. Confirmed StartDiscovery ownership is required for StopDiscovery;
 the call is attempted once against the original BlueZ owner. Filter cleanup is
 separate. Another client's discovery session is not stopped.
 
-Settings caps QProcess read buffers/output, parses complete lines incrementally,
-rejects duplicate/unknown fields, checks process generation, and marks rows stale
-after cancellation, failure, timeout, crash, invalid terminal, or forced kill.
-QML displays strings as plain text. Closing or navigating away requests graceful
-cancellation and a bounded fallback; forced termination never claims confirmed
-cleanup.
+Settings reads QProcess stdout in 8 KiB chunks, caps accepted stdout at 512 KiB,
+stderr at 4 KiB, and each line at 2 KiB, then parses complete lines
+incrementally. It rejects duplicate/unknown fields, checks process generation,
+and marks rows stale after cancellation, failure, timeout, crash, invalid
+terminal, or forced kill. QML displays strings as plain text. Closing or
+navigating away requests graceful cancellation and a bounded fallback; forced
+termination never claims confirmed cleanup.
 
 ## Findings and residual limits
 

@@ -21,11 +21,12 @@ program/argument fields and no shell:
 devices discover --seconds 10 --events-jsonl
 ```
 
-The provider stays asynchronous. Its read buffer is bounded, total stdout is
-capped at 512 KiB, stderr at 4 KiB, and each line at 2 KiB. It holds incomplete
-UTF-8 bytes until LF, so a multibyte character split across reads is parsed only
-after the complete line arrives. Multiple lines in one read are consumed in
-order. A final partial line is rejected as truncation.
+The provider stays asynchronous and reads stdout in 8 KiB chunks. It caps
+accepted stdout at 512 KiB, stderr at 4 KiB, and each line at 2 KiB; the CLI
+producer enforces the same total-output bound. It holds incomplete UTF-8 bytes
+until LF, so a multibyte character split across reads is parsed only after the
+complete line arrives. Multiple lines in one read are consumed in order. A
+final partial line is rejected as truncation.
 
 `DeviceDiscoveryReport` validates exact fields, duplicate JSON keys (including
 escaped equivalents), schema/source, authorization, session ID, sequence,
