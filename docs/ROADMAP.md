@@ -81,3 +81,11 @@ that labels the source and failure states. This does not perform discovery,
 establish proximity or Apple identity, or authorize Linux. P010 stays NO-GO.
 See [schema](research/P012_DEVICE_SNAPSHOT_SCHEMA.md), [qualification plan](research/P012_ARCH_QUALIFICATION_PLAN.md),
 and [validation](P012_VALIDATION.md).
+
+## P013 — bounded Bluetooth LE discovery (provisional)
+
+P013 implements manual 1–30 second discovery and a separate Settings Scan/Cancel
+workflow, preserving read-only inventory and unsupported Apple capabilities.
+Software, final-head CI and physical evidence are recorded separately in
+[P013 validation](P013_VALIDATION.md). The original full roadmap remains unavailable.
+Physical Arch discovery is NOT RUN; P010 remains NO-GO. P014 is not started.

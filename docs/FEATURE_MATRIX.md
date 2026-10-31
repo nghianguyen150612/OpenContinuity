@@ -37,6 +37,7 @@ States include the P011 provisional Settings foundation; earlier research rows r
 | Qt 6/QML Settings UI | supported | P011 native Linux window and DoctorReport bridge, extended by P012 manual read-only inventory. This does not implement native Apple protocols. |
 | BlueZ known-device snapshot | supported | P012 `devices list --json` reads one ObjectManager snapshot without discovery; versioned, bounded output and explicit error states. Device names are local display data. No Apple identity or authorization claim. |
 | Settings Devices inventory | supported | Manual refresh through a bounded asynchronous C++ provider and validated list model. No startup scan, connect, pair, forget or Apple protocol action. |
+| Explicit bounded Bluetooth LE discovery | implemented; physical NOT RUN | P013 CLI 1–30 seconds and native Settings Scan/Cancel; BlueZ event provenance, owned cleanup and no automatic scans. [Validation](P013_VALIDATION.md). |
 
 Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No native Apple protocol or production authentication feature is implemented.
 

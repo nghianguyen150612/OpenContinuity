@@ -1,10 +1,10 @@
 # P013 — Explicit, Bounded Bluetooth LE Discovery & Native Settings UI (Provisional)
 
-**Status:** STARTED — scope/branch only; implementation and PR NOT STARTED.
+**Status:** IMPLEMENTED — software validation and physical limitations are recorded in `docs/P013_VALIDATION.md`; delivered as a Draft PR.
 **Branch:** `feat/p013-opt-in-bluetooth-discovery`.
 **Base `main`:** `64b98ba7eb6a80e6969a531a2e924a38f33bb391` (P012 PR #13 squash merge).
 **Original-roadmap caveat:** The named original P001–P060 planning document remains unavailable. P013 is a clearly provisional, Linux-first continuation of the shipped Qt Settings + read-only BlueZ inventory, **not** a verified preexisting P013 scope.
-**CI caveat:** P012 was merged at the user's explicit request while new-head workflows for `3dc2f345...` were still queued. P013 must verify or repair any inherited regression before PR merge; do not describe P012's final-head CI as green without evidence.
+**P012 CI verification:** Final-head `3dc2f3459e826ef1a0bb9c84cae35e69f517fa3c` completed successfully in run `41161372066` (Rust, Qt, Swift/interoperability/watchOS/artifact packaging). Physical qualification remains separate.
 
 ## Objective and architectural boundary
 

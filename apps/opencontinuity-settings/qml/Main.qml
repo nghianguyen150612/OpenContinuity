@@ -15,6 +15,9 @@ ApplicationWindow {
     property alias currentPage: navigation.currentIndex
     readonly property var pageNames: ["Overview", "Devices", "Apple Watch", "AirDrop", "AirPods", "Continuity", "Research Lab / Diagnostics", "About"]
     readonly property bool compact: width < 1000
+    onCurrentPageChanged: if (currentPage !== 1) deviceDiscovery.cancel()
+    onActiveChanged: if (!active) deviceDiscovery.cancel()
+    onClosing: deviceDiscovery.cancel()
     SystemPalette { id: systemColors; colorGroup: SystemPalette.Active }
     palette.window: systemColors.window
     palette.windowText: systemColors.windowText
@@ -81,7 +84,7 @@ ApplicationWindow {
                     }
                 }
                 Label {
-                    text: "Read-only foundation\nNo Linux unlock"
+                    text: "Opt-in Bluetooth discovery\nNo Linux unlock"
                     font.pixelSize: 12
                     opacity: 0.65
                     Layout.fillWidth: true

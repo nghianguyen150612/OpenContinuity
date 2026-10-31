@@ -71,7 +71,7 @@ About pages. The C++20 backend runs only the static `opencontinuity doctor --jso
 command asynchronously with strict schema/size/deadline validation. Unsupported
 features remain unsupported; no devices, battery readings, transfers or unlock are
 invented. The Devices page now provides manual BlueZ known-device snapshots; it
-does not scan, pair or connect. No enabled protocol toggles, daemon control or
+keeps that read-only inventory independent from P013 opt-in discovery. No enabled protocol toggles, daemon control or
 research server startup are provided.
 
 See [Settings build/install instructions](apps/opencontinuity-settings/README.md),
@@ -88,3 +88,20 @@ devices, and never scans, pairs or connects. Apple Watch, AirDrop and AirPods
 capabilities remain unsupported. See the [snapshot schema](docs/research/P012_DEVICE_SNAPSHOT_SCHEMA.md),
 [UI behavior](docs/research/P012_SETTINGS_DEVICES_UI.md), [privacy boundary](docs/research/P012_PRIVACY_AND_THREAT_MODEL.md)
 and [P012 validation](docs/P012_VALIDATION.md). P010 physical qualification remains NO-GO.
+
+## P013 bounded Bluetooth LE discovery (provisional)
+
+Run `opencontinuity devices discover --seconds 10 --json` to explicitly use the
+Bluetooth radio for a bounded session (1–30 seconds; default 10). Settings Devices
+has **Scan Bluetooth LE for 10 seconds**, progress, Cancel, sanitized event cards
+and cleanup warnings. Nothing scans automatically. The separate known-device
+inventory and DoctorReport v1 are unchanged.
+
+Results are BlueZ events received during the session, not verified RF sightings,
+Apple identity, proximity or authentication. No addresses, paths or raw advertising
+data enter the report. Every report retains `authorization: never_evaluated`.
+See the [lifecycle](docs/research/P013_BLUEZ_DISCOVERY_LIFECYCLE.md),
+[schema](docs/research/P013_DISCOVERY_SCHEMA.md),
+[security review](docs/research/P013_DISCOVERY_SECURITY_REVIEW.md) and
+[validation](docs/P013_VALIDATION.md). Arch physical discovery is NOT RUN;
+Watch SE 2 qualification remains NO-GO. Native Apple features remain unsupported.

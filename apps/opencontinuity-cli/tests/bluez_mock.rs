@@ -1367,3 +1367,33 @@ fn malformed_gatt_call_trips_ordering_watchdog_and_server_fails_closed() {
     assert!(error.contains("monitor"), "unexpected report: {report}");
     assert_eq!(report["authorization"], "never_evaluated");
 }
+
+#[test]
+fn discovery_does_not_collide_with_our_active_gatt_research_server() {
+    let bus = PrivateBluez::start(FailureMode::None);
+    let mut gatt = bus.spawn_cli(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !bus
+        .events
+        .lock()
+        .unwrap()
+        .contains(&"register_advertisement")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        assert!(gatt.try_wait().unwrap().is_none());
+        thread::sleep(Duration::from_millis(5));
+    }
+    let result = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args(["devices", "discover", "--seconds", "1", "--json"])
+        .env("DBUS_SYSTEM_BUS_ADDRESS", &bus.address)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["status"], "adapter_busy");
+    assert_eq!(report["scan_started"], false);
+    // SAFETY: gatt is this test's live child process.
+    unsafe {
+        libc::kill(gatt.id() as i32, libc::SIGTERM);
+    }
+    assert!(gatt.wait_with_output().unwrap().status.success());
+}

@@ -23,9 +23,11 @@ use std::{
 };
 
 mod bluez;
+mod device_discovery;
 mod device_inventory;
 mod gatt;
 mod qualification_diagnostics;
+mod radio_guard;
 
 const HELP: &str = concat!(
     "OpenContinuity — native Apple ecosystem compatibility for Linux and beyond\n\n",
@@ -41,6 +43,7 @@ const HELP: &str = concat!(
     "       opencontinuity research watch-auth-gatt check-enrollment --enrollments <path> --host-key-file <path> --experimental [--json]\n",
     "       opencontinuity research watch-ble --capabilities [--json]\n",
     "       opencontinuity devices list --json\n",
+    "       opencontinuity devices discover [--seconds 10] [--adapter-index 1] --json\n",
     "       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\n",
     "Commands:\n",
     "  doctor         Report this build's capability states without scanning devices\n",
@@ -113,6 +116,21 @@ fn main() -> ExitCode {
 }
 
 fn run_devices(args: Vec<String>) -> ExitCode {
+    if args.first().map(String::as_str) == Some("discover") {
+        let Ok(options) = device_discovery::Options::parse(&args[1..]) else {
+            return usage_error();
+        };
+        let report = device_discovery::run(options);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("bounded discovery report serializes")
+        );
+        return if report.status == device_discovery::Status::Completed {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
     if args.len() != 2 || args[0] != "list" || args[1] != "--json" {
         return usage_error();
     }
