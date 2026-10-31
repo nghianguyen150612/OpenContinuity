@@ -74,3 +74,18 @@ mutation method is called. The Qt app adds a manual `DeviceInventoryProvider`
 and list model with strict JSON parsing; no startup refresh or QML D-Bus access
 is added. See [P012 architecture](research/P012_BLUEZ_INVENTORY_ARCHITECTURE.md)
 and the [schema](research/P012_DEVICE_SNAPSHOT_SCHEMA.md).
+
+## P013 — owned, bounded discovery
+
+The independent Rust `device_discovery` module uses asynchronous zbus 5.12.0,
+a dedicated per-client system-bus connection, pinned BlueZ owner and bounded
+subscriptions. A shared same-UID cooperative guard excludes this project's GATT
+experiments on the selected adapter. Explicit CLI/UI opt-in installs an LE filter,
+starts once, observes allowlisted activity, then stops the confirmed owned session,
+clears its filter and disconnects. No detached mutable worker is used.
+
+The Qt DeviceDiscoveryProvider/Report/Model are separate from inventory and Doctor.
+Fixed asynchronous process arguments, strict schema v1 validation, graceful
+cancellation and uncertain-cleanup fallback keep radio ownership visible.
+See [lifecycle](research/P013_BLUEZ_DISCOVERY_LIFECYCLE.md) and
+[UI behavior](research/P013_SETTINGS_SCAN_UI.md).

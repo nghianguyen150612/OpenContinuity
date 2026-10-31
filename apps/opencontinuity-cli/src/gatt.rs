@@ -2125,6 +2125,14 @@ mod linux {
             return Err(error);
         }
         let adapter_path = format!("/org/bluez/{adapter}");
+        let _radio_guard = crate::radio_guard::acquire(&adapter_path).map_err(|_| {
+            err_report(
+                adapter,
+                duration,
+                "preflight",
+                "adapter busy with a cooperative OpenContinuity radio session",
+            )
+        })?;
         let nonce = random_bytes::<8>().map_err(|error| {
             err_report(
                 adapter,

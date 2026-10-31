@@ -97,3 +97,14 @@ binary or cryptographically attest its capability claims. Normal QProcess/OS pip
 buffering is not a strict whole-process memory quota. A compromised local CLI or
 Qt plugin is outside this presentation boundary. No reported state authorizes
 Linux; `authorization: never_evaluated` and hardware NO-GO remain visible.
+
+## P013 — explicit radio use
+
+The Devices Scan action and discovery subcommand authorize a bounded mutable
+BlueZ session. Startup, navigation, background work, inventory and Doctor cannot
+start it. Per-client ownership, pinned-owner cleanup, cancellation deadlines,
+message/data caps and independent Qt schema checks reduce error exposure.
+Disconnect is an uncertain-cleanup fallback, not proof that StopDiscovery ran.
+BlueZ events and attacker-controlled labels cannot establish RF proximity, Apple
+identity, wearer identity or authentication. No authorization consumer is added.
+See the [P013 security review](research/P013_DISCOVERY_SECURITY_REVIEW.md).

@@ -62,6 +62,32 @@ ScrollView {
             visible: page.pageIndex === 1
             Layout.fillWidth: true
             spacing: 12
+            Label { text: "Active Bluetooth LE discovery"; font.weight: Font.Bold; font.pixelSize: 18; Layout.fillWidth: true }
+            Label {
+                text: "This action actively uses the Bluetooth radio for 10 seconds and may affect other Bluetooth activity. Bluetooth discovery is not authentication. Names and events do not verify Apple identity or proximity."
+                textFormat: Text.PlainText; wrapMode: Text.WordWrap; Layout.fillWidth: true
+            }
+            RowLayout {
+                Button { objectName: "scanBluetooth"; text: "Scan Bluetooth LE for 10 seconds"; enabled: !deviceDiscovery.scanning; onClicked: deviceDiscovery.scan() }
+                Button { objectName: "cancelBluetoothScan"; text: "Cancel Scan"; visible: deviceDiscovery.scanning; enabled: !deviceDiscovery.cancelling; onClicked: deviceDiscovery.cancel() }
+            }
+            BusyIndicator { visible: deviceDiscovery.scanning; running: visible; implicitWidth: 28; implicitHeight: 28 }
+            Label { objectName: "discoveryStatus"; text: deviceDiscovery.message; textFormat: Text.PlainText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            Label { text: "Duration: " + deviceDiscovery.requestedSeconds + " seconds requested · " + (deviceDiscovery.scanning ? deviceDiscovery.elapsedSeconds.toFixed(1) + " seconds elapsed (including setup)" : deviceDiscovery.durationKnown ? deviceDiscovery.elapsedSeconds.toFixed(1) + " seconds of reported observation" : "observation duration unavailable"); wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            Label { objectName: "discoveryCleanup"; visible: deviceDiscovery.cleanupStatus === "incomplete"; text: "Cleanup warning: the owned session could not be confirmed released. D-Bus disconnect is the fallback; forced termination cannot confirm StopDiscovery."; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.weight: Font.Bold }
+            Label { visible: deviceDiscovery.devices.stale; text: "Previous scan results (stale or partial)"; Layout.fillWidth: true; wrapMode: Text.WordWrap; font.weight: Font.DemiBold }
+            Repeater {
+                model: deviceDiscovery.devices
+                delegate: Card {
+                    objectName: "discoveredDeviceCard"
+                    required property string displayName
+                    required property bool stale
+                    heading: displayName
+                    status: stale ? "Stale observation" : "Unverified BlueZ observation"
+                    detail: "A BlueZ device event occurred during this session. This is not verified RF evidence, Apple identity, authentication or Linux authorization."
+                }
+            }
+            Label { text: "Known-device inventory"; font.weight: Font.Bold; font.pixelSize: 18; Layout.fillWidth: true }
             Label { text: "BlueZ known devices — no Bluetooth scan performed."; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.weight: Font.DemiBold }
             Button {
                 objectName: "refreshKnownDevices"

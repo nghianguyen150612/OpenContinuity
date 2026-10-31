@@ -183,7 +183,9 @@ private slots:
     QFETCH(QByteArray, mode);
     QFETCH(QString, expected);
     qputenv("OC_SETTINGS_TEST_MODE", mode);
-    DoctorProvider p({fixtureExecutable, 100});
+    // Only the deadline scenario needs a short timeout. Error classification
+    // must not depend on starting/reaping the fixture within 100 ms on CI.
+    DoctorProvider p({fixtureExecutable, mode == "timeout" ? 100 : 2000});
     p.refresh();
     QTRY_COMPARE(p.reportState(), expected);
     QVERIFY(!p.loading());

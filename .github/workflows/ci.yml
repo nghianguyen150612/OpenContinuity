@@ -112,13 +112,13 @@ jobs:
           sudo apt-get install -y cmake ninja-build g++ qt6-base-dev qt6-declarative-dev qt6-svg-dev qt6-qpa-plugins qt6-wayland \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
             qml6-module-qtquick-window qml6-module-qtqml-workerscript qml6-module-qtquick-templates
-      - name: Build read-only CLI
+      - name: Build CLI (discovery remains explicit)
         run: cargo build --bin opencontinuity
       - name: Configure Settings
         run: cmake -S apps/opencontinuity-settings -B build/settings -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build Settings and native test peer
         run: cmake --build build/settings --parallel 2
-      - name: C++ unit tests and real QML window navigation
+      - name: C++ inventory/discovery tests and real QML Scan/Cancel/navigation
         env:
           OC_REAL_CLI: ${{ github.workspace }}/target/debug/opencontinuity
         run: ctest --test-dir build/settings --output-on-failure --verbose

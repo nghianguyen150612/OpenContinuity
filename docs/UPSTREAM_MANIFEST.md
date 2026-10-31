@@ -60,3 +60,10 @@ obligations and compliance with other relevant conditions. This source-only CMak
 install does not produce a self-contained licensed binary bundle. Distributors
 must audit the exact system Qt build, plugins and transitive dependencies. No
 GPL-only optional Qt module is intentionally selected here.
+
+## P013 BlueZ discovery API use
+
+P013 uses public BlueZ Adapter1/ObjectManager/Properties D-Bus interfaces via the
+already pinned zbus 5.12.0 dependency. No BlueZ implementation source or Apple
+protocol code is copied. Reference: https://github.com/bluez/bluez/blob/master/doc/org.bluez.Adapter.rst.
+Existing Qt linking and distribution obligations remain unchanged.
