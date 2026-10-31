@@ -41,6 +41,7 @@ Frame {
         }
         Label {
             visible: card.detail.length > 0
+            objectName: card.objectName.length > 0 ? card.objectName + "Detail" : ""
             text: card.detail
             textFormat: Text.PlainText
             color: card.palette.text

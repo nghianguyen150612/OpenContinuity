@@ -34,7 +34,9 @@ States include the P011 provisional Settings foundation; earlier research rows r
 | Foreground Watch confirmation | experimental | Public `.deviceOwnerAuthentication` is listed for watchOS; P008 checks runtime support after explicit user action. No Apple build or SE 2 test; no third-party biometric or Touch ID claim. |
 | Apple Watch Auto Unlock feasibility | blocked / unknown | Native Linux interoperation remains blocked on a public third-party enrollment/STS endpoint; undocumented feasibility and SE 2-specific behavior remain unknown. P008 is a separate custom research protocol, not native Auto Unlock. |
 | Production device identity, secure key custody, persistent replay state, proximity, readiness | unknown | P008 only demonstrates software signatures under test-only pins. Genuine Watch identity, hardware-backed custody, durable replay state and proximity are not established. |
-| Qt 6/QML Settings UI | supported | P011 native Linux window, eight pages, bounded read-only DoctorReport bridge, Qt tests and desktop installer. This does not implement native Apple protocols or device discovery. |
+| Qt 6/QML Settings UI | supported | P011 native Linux window and DoctorReport bridge, extended by P012 manual read-only inventory. This does not implement native Apple protocols. |
+| BlueZ known-device snapshot | supported | P012 `devices list --json` reads one ObjectManager snapshot without discovery; versioned, bounded output and explicit error states. Device names are local display data. No Apple identity or authorization claim. |
+| Settings Devices inventory | supported | Manual refresh through a bounded asynchronous C++ provider and validated list model. No startup scan, connect, pair, forget or Apple protocol action. |
 
 Native interoperability, research simulation, experimental feasibility claims, and unimplemented plans are separate claims. No native Apple protocol or production authentication feature is implemented.
 

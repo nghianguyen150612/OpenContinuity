@@ -2,7 +2,7 @@
 
 OpenContinuity is an open-source effort to build native Apple ecosystem interoperability for Linux first, with other Unix-like systems and Windows as future targets. The reference desktop is Arch Linux with Hyprland and Caelestia.
 
-- **Desktop app:** OpenContinuity Settings (planned; not included in P001)
+- **Desktop app:** OpenContinuity Settings (Qt 6/QML)
 - **CLI:** `opencontinuity`
 - **Daemon:** `opencontinuityd`
 - **Core:** portable Rust 2024 contracts
@@ -21,6 +21,7 @@ cargo build --workspace
 cargo run -p opencontinuity-cli -- --help
 cargo run -p opencontinuity-cli -- doctor
 cargo run -p opencontinuity-cli -- doctor --json
+cargo run -p opencontinuity-cli -- devices list --json
 cargo run -p opencontinuity-cli -- research watch --fixture tests/fixtures/watch-discovery.json --json
 cargo run -p opencontinuity-cli -- research watch-endpoint --fixture tests/fixtures/watch-endpoint.json --json
 cargo run -p opencontinuity-cli -- research watch-auth --fixture path/to/signed-test-fixture.json --json
@@ -69,11 +70,21 @@ Devices, Apple Watch, AirDrop, AirPods, Continuity, Research Lab / Diagnostics a
 About pages. The C++20 backend runs only the static `opencontinuity doctor --json`
 command asynchronously with strict schema/size/deadline validation. Unsupported
 features remain unsupported; no devices, battery readings, transfers or unlock are
-invented. Devices has an honest missing-adapter state. No enabled protocol toggles,
-Bluetooth scans, daemon control or research server startup are provided.
+invented. The Devices page now provides manual BlueZ known-device snapshots; it
+does not scan, pair or connect. No enabled protocol toggles, daemon control or
+research server startup are provided.
 
 See [Settings build/install instructions](apps/opencontinuity-settings/README.md),
 [architecture](docs/research/P011_SETTINGS_ARCHITECTURE.md),
 [desktop dependencies and tests](docs/research/P011_DESKTOP_BUILD_AND_TEST.md) and
 [P011 validation](docs/P011_VALIDATION.md). P010 hardware qualification remains
-**NO-GO**. P012 has not begun.
+**NO-GO**.
+
+## P012 Linux known-device inventory (provisional)
+
+The Settings Devices page provides a manual read-only BlueZ snapshot through
+`opencontinuity devices list --json`. It lists BlueZ-known objects, not nearby
+devices, and never scans, pairs or connects. Apple Watch, AirDrop and AirPods
+capabilities remain unsupported. See the [snapshot schema](docs/research/P012_DEVICE_SNAPSHOT_SCHEMA.md),
+[UI behavior](docs/research/P012_SETTINGS_DEVICES_UI.md), [privacy boundary](docs/research/P012_PRIVACY_AND_THREAT_MODEL.md)
+and [P012 validation](docs/P012_VALIDATION.md). P010 physical qualification remains NO-GO.

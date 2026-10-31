@@ -23,6 +23,7 @@ use std::{
 };
 
 mod bluez;
+mod device_inventory;
 mod gatt;
 mod qualification_diagnostics;
 
@@ -39,9 +40,11 @@ const HELP: &str = concat!(
     "       opencontinuity research watch-auth-gatt export-host-pin --host-enrollment-id <id> --host-identity <id> --linux-uid <uid> --host-key-file <path> --experimental [--json]\n",
     "       opencontinuity research watch-auth-gatt check-enrollment --enrollments <path> --host-key-file <path> --experimental [--json]\n",
     "       opencontinuity research watch-ble --capabilities [--json]\n",
+    "       opencontinuity devices list --json\n",
     "       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\n",
     "Commands:\n",
     "  doctor         Report this build's capability states without scanning devices\n",
+    "  devices list   Read one snapshot of BlueZ known devices (never scans)\n",
     "  research       Read fixtures, inspect BlueZ, or run an explicit experimental GATT server\n",
     "  --help         Print this help\n",
     "  --version      Print version\n\n",
@@ -104,7 +107,36 @@ fn main() -> ExitCode {
             _ => usage_error(),
         },
         Some("research") => run_research(args.collect()),
+        Some("devices") => run_devices(args.collect()),
         _ => usage_error(),
+    }
+}
+
+fn run_devices(args: Vec<String>) -> ExitCode {
+    if args.len() != 2 || args[0] != "list" || args[1] != "--json" {
+        return usage_error();
+    }
+    let report = device_inventory::read_snapshot();
+    let status = report.status;
+    match serde_json::to_vec_pretty(&report) {
+        Ok(bytes) if bytes.len() < device_inventory::MAX_OUTPUT_BYTES => {
+            println!("{}", String::from_utf8_lossy(&bytes));
+            if status == device_inventory::InventoryStatus::Ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        _ => {
+            let failure = device_inventory::DeviceInventory::failed(
+                device_inventory::InventoryStatus::MalformedData,
+            );
+            println!(
+                "{}",
+                serde_json::to_string(&failure).expect("fixed status serializes")
+            );
+            ExitCode::FAILURE
+        }
     }
 }
 

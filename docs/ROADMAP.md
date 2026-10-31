@@ -70,6 +70,14 @@ DoctorReport v1 process bridge. Eight pages, accessible keyboard navigation,
 light/dark palette colors, bounded errors/stale state, native Qt tests, an actual
 window smoke test, desktop installation and a separate Linux Qt CI job are
 implemented. Production device discovery, Apple protocols and auth integration
-remain excluded. P010 physical qualification stays NO-GO. P012 has not begun.
+remain excluded at the P011 milestone. P010 physical qualification stays NO-GO.
 See [scope](research/P011_SETTINGS_FOUNDATION_SCOPE.md) and
 [validation](P011_VALIDATION.md). Earlier absence statements are historical.
+
+## P012 — Linux BlueZ inventory (provisional)
+
+P012 adds a read-only, manual known-device snapshot and a native Settings page
+that labels the source and failure states. This does not perform discovery,
+establish proximity or Apple identity, or authorize Linux. P010 stays NO-GO.
+See [schema](research/P012_DEVICE_SNAPSHOT_SCHEMA.md), [qualification plan](research/P012_ARCH_QUALIFICATION_PLAN.md),
+and [validation](P012_VALIDATION.md).

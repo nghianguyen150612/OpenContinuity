@@ -1,4 +1,5 @@
 #include "DoctorProvider.h"
+#include "DeviceInventoryProvider.h"
 #include <QGuiApplication>
 #include <QPalette>
 #include <QQmlApplicationEngine>
@@ -26,13 +27,17 @@ private slots:
   void realWindowAndNavigation_data() {
     QTest::addColumn<bool>("unavailable");
     QTest::addColumn<bool>("dark");
-    QTest::newRow("loaded-light") << false << false;
-    QTest::newRow("loaded-dark") << false << true;
-    QTest::newRow("missing-cli") << true << false;
+    QTest::addColumn<QString>("inventoryOutcome");
+    QTest::newRow("loaded-light") << false << false << QString("sample");
+    QTest::newRow("loaded-dark") << false << true << QString("sample");
+    QTest::newRow("successful-empty-inventory") << false << false << QString("empty");
+    QTest::newRow("missing-bluez") << false << false << QString("bluez_unavailable");
+    QTest::newRow("missing-cli") << true << false << QString("sample");
   }
   void realWindowAndNavigation() {
     QFETCH(bool, unavailable);
     QFETCH(bool, dark);
+    QFETCH(QString, inventoryOutcome);
     QPalette palette;
     if (dark) {
       palette.setColor(QPalette::Window, QColor("#20232a"));
@@ -54,13 +59,21 @@ private slots:
             ? QCoreApplication::applicationDirPath() + "/doctor-fixture"
             : realCli;
     DoctorProvider backend({cli});
+    const auto inventoryCli = unavailable ? QString("/nonexistent/opencontinuity")
+        : qEnvironmentVariable("OC_INVENTORY_CLI", QCoreApplication::applicationDirPath() + "/doctor-fixture");
+    DeviceInventoryProvider inventory({inventoryCli});
     qmlRegisterUncreatableType<StatusModel>("OpenContinuity.Backend", 1, 0,
                                             "StatusModel", "Owned");
     qmlRegisterUncreatableType<DoctorProvider>("OpenContinuity.Backend", 1, 0,
                                                "DoctorProvider", "Owned");
+    qmlRegisterUncreatableType<DeviceInventoryModel>("OpenContinuity.Backend", 1, 0,
+                                                     "DeviceInventoryModel", "Owned");
+    qmlRegisterUncreatableType<DeviceInventoryProvider>("OpenContinuity.Backend", 1, 0,
+                                                        "DeviceInventoryProvider", "Owned");
     QQmlApplicationEngine engine;
     QSignalSpy warnings(&engine, &QQmlEngine::warnings);
     engine.rootContext()->setContextProperty("doctor", &backend);
+    engine.rootContext()->setContextProperty("deviceInventory", &inventory);
     engine.load(QUrl("qrc:/qml/Main.qml"));
     QVERIFY2(!engine.rootObjects().isEmpty(),
              "The real application window must load");
@@ -89,6 +102,10 @@ private slots:
       QVERIFY(heading);
       QCOMPARE(heading->property("text").toString(), pages[i]);
       QVERIFY(window->findChild<QObject *>("settingsPage"));
+      if (!unavailable && (i == 2 || i == 4)) {
+        const auto cap = backend.capability(i == 2 ? "apple_watch_auto_unlock" : "airpods_settings");
+        QCOMPARE(cap.value("state").toString(), "unsupported");
+      }
     }
     QTest::keyClick(window, Qt::Key_Left, Qt::AltModifier);
     QTRY_COMPARE(window->property("currentPage").toInt(), 6);
@@ -103,6 +120,30 @@ private slots:
     QTest::keyClick(window, Qt::Key_Right, Qt::AltModifier);
     QTRY_COMPARE(window->property("currentPage").toInt(), 1);
     QCOMPARE(nav->property("currentIndex").toInt(), 1);
+    auto *inventoryRefresh = window->findChild<QQuickItem *>("refreshKnownDevices");
+    QVERIFY(inventoryRefresh);
+    auto *inventoryStatus = window->findChild<QObject *>("inventoryStatus");
+    QVERIFY(inventoryStatus);
+    QCOMPARE(inventory.state(), "idle");
+    qputenv("OC_INVENTORY_MODE", inventoryOutcome.toUtf8());
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                      inventoryRefresh->mapToScene(QPointF(inventoryRefresh->width() / 2, inventoryRefresh->height() / 2)).toPoint());
+    const QString expectedInventoryState = unavailable ? "cli_unavailable" : inventoryOutcome == "bluez_unavailable" ? "bluez_unavailable" : "loaded";
+    QTRY_COMPARE(inventory.state(), expectedInventoryState);
+    if (!unavailable && inventoryOutcome == "bluez_unavailable") {
+      QVERIFY(inventoryStatus->property("text").toString().contains("BlueZ is unavailable"));
+      QCOMPARE(inventory.devices()->count(), 0);
+    } else if (!unavailable) {
+      const bool emptyInventory = inventoryOutcome == "empty";
+      QCOMPARE(inventory.devices()->count(), emptyInventory ? 0 : 1);
+      QVERIFY(inventoryStatus->property("text").toString().contains("snapshot"));
+      QVERIFY(window->findChild<QObject *>("inventorySummary")->property("text").toString().contains(emptyInventory ? "0" : "1"));
+      if (!emptyInventory) {
+        QVERIFY(visualItem(window->findChild<QQuickItem *>("settingsPage"), "knownDeviceCardDetail"));
+        auto *detail = visualItem(window->findChild<QQuickItem *>("settingsPage"), "knownDeviceCardDetail");
+        QVERIFY(detail->property("text").toString().contains("BlueZ reports connected: no"));
+      }
+    }
     auto *refresh = window->findChild<QQuickItem *>("refresh");
     QVERIFY(refresh);
     QTest::mouseClick(

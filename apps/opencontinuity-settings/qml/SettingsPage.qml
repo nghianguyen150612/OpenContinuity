@@ -58,11 +58,61 @@ ScrollView {
                 detail: summary
             }
         }
-        Card {
+        ColumnLayout {
             visible: page.pageIndex === 1
-            heading: "No device discovery adapter"
-            status: "Not implemented"
-            detail: "This app has no discovered-device list. No Bluetooth scan, pairing or background monitoring is performed. Connected devices cannot be determined in this build."
+            Layout.fillWidth: true
+            spacing: 12
+            Label { text: "BlueZ known devices — no Bluetooth scan performed."; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.weight: Font.DemiBold }
+            Button {
+                objectName: "refreshKnownDevices"
+                text: deviceInventory.loading ? "Refreshing…" : "Refresh known devices"
+                enabled: !deviceInventory.loading
+                onClicked: deviceInventory.refresh()
+            }
+            Label {
+                objectName: "inventoryStatus"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: deviceInventory.loading ? "Loading one read-only snapshot…" :
+                      deviceInventory.state === "idle" ? "Not refreshed. No Bluetooth scan has been performed." :
+                      deviceInventory.state === "stale" ? "Stale snapshot. " + deviceInventory.lastError :
+                      deviceInventory.state === "loaded" && deviceInventory.devices.count === 0 ? "No known devices in this BlueZ snapshot." :
+                      deviceInventory.state === "loaded" ? "Snapshot ready." :
+                      deviceInventory.state === "cli_unavailable" ? "CLI unavailable. Install opencontinuity beside this app or launch with --cli /absolute/path/opencontinuity." :
+                      deviceInventory.lastError
+            }
+            Label {
+                objectName: "inventorySummary"
+                text: "BlueZ known-device count: " + deviceInventory.devices.count + " · Adapter: " +
+                      (deviceInventory.adapterCount > 0 ? "available" : deviceInventory.status === "no_adapter" ? "not available" : "unknown") +
+                      (deviceInventory.lastUpdated.length ? " · Last refresh: " + deviceInventory.lastUpdated : "")
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+            Repeater {
+                model: deviceInventory.devices
+                delegate: Card {
+                    objectName: "knownDeviceCard"
+                    required property string displayName
+                    required property var connected
+                    required property var paired
+                    required property var trusted
+                    required property bool stale
+                    heading: displayName
+                    status: stale ? "Stale snapshot" : "BlueZ known device"
+                    detail: "BlueZ reports connected: " + (connected === null || connected === undefined ? "unknown" : connected ? "yes" : "no") +
+                            "\nPaired: " + (paired === null || paired === undefined ? "unknown" : paired ? "yes" : "no") +
+                            "\nTrusted by BlueZ: " + (trusted === null || trusted === undefined ? "unknown" : trusted ? "yes" : "no") +
+                            "\nBlueZ Trusted is local state; it does not authenticate Apple identity or the wearer."
+                }
+            }
+            Label {
+                visible: deviceInventory.state === "loaded" && deviceInventory.devices.count === 0
+                text: "A successful empty snapshot means BlueZ currently publishes no known Device1 objects. It does not mean no devices are nearby."
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                opacity: 0.75
+            }
         }
         Card {
             visible: page.pageIndex >= 2 && page.pageIndex <= 4

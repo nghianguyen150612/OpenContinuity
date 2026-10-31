@@ -19,10 +19,12 @@ build/settings/opencontinuity-settings --cli "$PWD/target/debug/opencontinuity"
 The last command opens a desktop window. In a headless environment, use the
 smoke tests instead. CLI lookup defaults to `opencontinuity` in the Settings
 executable's own directory, never the current directory or PATH. `--cli` accepts
-one trusted absolute executable path; it always receives only `doctor --json`.
+one trusted absolute executable path; it receives only fixed `doctor --json` or
+`devices list --json` arguments.
 A missing CLI still leaves every page navigable with an explanatory error.
 Refresh is manual (Ctrl+R), asynchronous, limited to three seconds, and never
-performs Bluetooth discovery. Reports become visibly stale after five minutes.
+performs Bluetooth discovery. Device snapshots are refreshed only by the
+Devices button and stale rows are labeled.
 
 Install to a user-owned prefix:
 
@@ -38,5 +40,13 @@ No services, authentication settings or compositor configuration are installed.
 See [build and troubleshooting](../../docs/research/P011_DESKTOP_BUILD_AND_TEST.md)
 for Arch/Hyprland, Ubuntu, Wayland/X11 plugins and manual checks. Native Watch
 Auto Unlock, AirDrop and AirPods protocols are unsupported. Device discovery is
-not implemented. P007–P010 research is informational only;
+unsupported. P007–P010 research is informational only;
 `authorization: never_evaluated`. P010 hardware qualification remains NO-GO.
+
+The Devices page lists BlueZ's already-known objects and says explicitly that no
+Bluetooth scan was performed. Empty, unavailable, denied and stale outcomes are
+distinct. BlueZ `Trusted` does not authenticate an Apple device. No connect,
+pair, forget, AirDrop, AirPods or Watch unlock controls are provided. See the
+[P012 schema](../../docs/research/P012_DEVICE_SNAPSHOT_SCHEMA.md),
+[UI design](../../docs/research/P012_SETTINGS_DEVICES_UI.md), and
+[validation](../../docs/P012_VALIDATION.md).
