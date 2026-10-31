@@ -1,0 +1,1 @@
+{"schema_version":1,"source":"bluez_known_device_snapshot","scan_performed":false,"status":"ok","adapters":[{"id":"adapter-001","powered":true}],"devices":[{"id":"device-001","adapter_id":"adapter-001","display_name":"Headphones","connected":false,"paired":true,"trusted":null,"services_resolved":null}],"authorization":"never_evaluated"}

@@ -59,7 +59,18 @@ Qt Quick Controls/Layout ApplicationWindow, eight pages and original icon. It
 links system Qt 6.4+ and communicates only through an asynchronous bounded
 `QProcess` invocation of a trusted absolute CLI with `doctor --json`. Strict v1
 validation and QAbstractListModel projections preserve the Rust contract. Errors
-and stale reports are explicit; device discovery and protocol actions remain
-absent. There is no Qt/Cargo dependency or Rust core change. Earlier statements
+and stale reports are explicit. At P011, device discovery and protocol actions
+remained absent. There is no Qt/Cargo dependency or Rust core change. Earlier statements
 about an absent Settings framework describe their historical milestone.
 See [P011 architecture](research/P011_SETTINGS_ARCHITECTURE.md).
+
+## P012 — BlueZ known-device inventory
+
+The separate Linux `device_inventory` CLI module issues one typed system-bus
+ObjectManager snapshot and extracts only Adapter1 and Device1 properties. It
+has a three-second caller deadline, sanitized snapshot-index IDs, count/output
+caps and a versioned schema independent of DoctorReport. No discovery or
+mutation method is called. The Qt app adds a manual `DeviceInventoryProvider`
+and list model with strict JSON parsing; no startup refresh or QML D-Bus access
+is added. See [P012 architecture](research/P012_BLUEZ_INVENTORY_ARCHITECTURE.md)
+and the [schema](research/P012_DEVICE_SNAPSHOT_SCHEMA.md).

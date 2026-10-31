@@ -1,4 +1,5 @@
 #include "DoctorProvider.h"
+#include "DeviceInventoryProvider.h"
 #include <QCommandLineParser>
 #include <QDir>
 #include <QGuiApplication>
@@ -29,18 +30,26 @@ int main(int argc, char **argv) {
                                  : QDir(QCoreApplication::applicationDirPath())
                                        .filePath("opencontinuity");
   DoctorProvider backend({executable});
+  DeviceInventoryProvider inventory({executable});
   qmlRegisterUncreatableType<StatusModel>(
       "OpenContinuity.Backend", 1, 0, "StatusModel", "Owned by DoctorProvider");
   qmlRegisterUncreatableType<DoctorProvider>("OpenContinuity.Backend", 1, 0,
                                              "DoctorProvider",
                                              "Owned by the application");
+  qmlRegisterUncreatableType<DeviceInventoryModel>("OpenContinuity.Backend", 1, 0,
+                                                   "DeviceInventoryModel", "Owned by DeviceInventoryProvider");
+  qmlRegisterUncreatableType<DeviceInventoryProvider>("OpenContinuity.Backend", 1, 0,
+                                                      "DeviceInventoryProvider", "Owned by the application");
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("doctor", &backend);
+  engine.rootContext()->setContextProperty("deviceInventory", &inventory);
   engine.load(QUrl("qrc:/qml/Main.qml"));
   if (engine.rootObjects().isEmpty())
     return 1;
   QTimer::singleShot(0, &backend, &DoctorProvider::refresh);
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &backend,
                    &DoctorProvider::cancel);
+  QObject::connect(&app, &QCoreApplication::aboutToQuit, &inventory,
+                   &DeviceInventoryProvider::cancel);
   return app.exec();
 }

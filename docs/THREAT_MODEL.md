@@ -78,6 +78,19 @@ The GUI has no D-Bus/Bluetooth/authentication integration, key generation,
 telemetry, daemon activation or automatic research server action. See
 [bridge threat boundary](research/P011_DOCTOR_BRIDGE.md).
 
+## P012 known-device inventory
+
+The Linux adapter reads one system D-Bus ObjectManager snapshot and uses only
+published Adapter1/Device1 properties. It calls no scan, connection, pairing,
+trust mutation, removal or registration method. D-Bus exceptions are reduced to
+fixed status values; raw object paths and addresses never enter public JSON.
+Names are treated as personal data and only shown locally after sanitization.
+The CLI caps counts, names, output and total wait; Qt repeats schema and size
+validation and rejects stale callbacks. A known Device1 may be old, and its
+Connected/Paired/Trusted values are BlueZ claims only. They do not prove
+proximity, Apple identity, wearer identity or authorization. See [P012 privacy
+and threat model](research/P012_PRIVACY_AND_THREAT_MODEL.md).
+
 The selected executable and system Qt/plugin installation remain trusted local
 code. The process bridge is not a sandbox and does not authenticate a replaced
 binary or cryptographically attest its capability claims. Normal QProcess/OS pipe
