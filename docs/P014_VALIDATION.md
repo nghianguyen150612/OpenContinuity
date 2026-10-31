@@ -15,8 +15,8 @@ This record distinguishes software evidence from physical radio qualification.
 | `cargo build --workspace` | PASS |
 | `python3 -m unittest discover -s scripts/tests -v` | PASS, 7 tests |
 | `git diff --check` | PASS |
-| Qt 6.4.2 CMake/Ninja/CTest and QML smoke | NOT RUN locally: CMake, Ninja, and Qt development headers are absent; hosted CI pending |
-| Swift/watchOS regression and Rust→Swift→Rust checks | NOT RUN locally: Swift/Xcode are unavailable on this Linux execution host; hosted macOS CI pending |
+| Qt 6.4.2 CMake/Ninja/CTest and QML smoke | NOT RUN locally: CMake, Ninja, and Qt development headers are absent; passed in hosted CI |
+| Swift/watchOS regression and Rust→Swift→Rust checks | NOT RUN locally: Swift/Xcode are unavailable on this Linux execution host; passed in hosted macOS CI |
 
 Rust mock BlueZ tests use private `dbus-daemon` instances and the production zbus
 discovery path. JSONL tests cover ordering, updates, cancellation, closed stdout,
@@ -26,9 +26,19 @@ fixtures and offscreen QML tests, when run in CI, are software evidence only.
 
 ## GitHub delivery
 
-Draft PR URL, final head, and final-head push/PR workflow results are recorded
-after publication. Earlier P013 green checks are inherited baseline evidence,
-not a substitute for checking this P014 head.
+Draft PR: https://github.com/nghianguyen150612/OpenContinuity/pull/15
+
+Validated code head: `45a4855b4f3e93e15e8681d7baaa3ed206402998`.
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| Push CI | [41206377962](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/41206377962) | PASS — Rust checks, Swift/watchOS, Qt Settings, C++/CTest, and QML smoke |
+| Pull request CI | [41206383539](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/41206383539) | Swift/watchOS and Qt Settings passed. The duplicate Rust job remained queued when this record was written; the push workflow completed all Rust gates on the same head. |
+
+The hosted Settings build exposed and verified fixes for a narrowing conversion
+in the malformed-UTF-8 fixture, an unsupported QProcess API call, and a QtTest
+fixture argument being interpreted as a test filter. The final push workflow
+passed after those fixes. Earlier P013 checks are baseline evidence only.
 
 ## Physical evidence and merge boundary
 
@@ -43,6 +53,12 @@ Every event keeps `authorization: never_evaluated`.
 
 ## Final results
 
-This section is completed after all requested local gates and final-head GitHub
-checks have run. Any unavailable gate, failure, or remaining merge blocker is
-listed explicitly.
+Local Rust, Python, formatting, and whitespace gates passed. Hosted CI passed
+all push jobs on the validated code head; Qt, C++, QML, Swift, watchOS, and
+Rust→Swift→Rust coverage passed. The PR-triggered duplicate Rust job was still
+queued, while that same Rust job passed in the push run.
+
+Arch physical BLE testing remains unrun and P010 Watch SE 2 remains NO-GO, so
+the Draft PR is not evidence for hardware, watchOS behavior, proximity, identity,
+or authorization qualification. The P014 code is ready for review; physical
+qualification remains outside this software validation.
