@@ -12,7 +12,7 @@ constexpr qsizetype MaxStderr = 4096;
 bool uniqueMembers(const QByteArray &bytes) {
   QVector<QSet<QString>> objects;
   for (qsizetype i = 0; i < bytes.size(); ++i) {
-    if (bytes[i] == '{') { objects.append({}); if (objects.size() > 4) return false; }
+    if (bytes[i] == '{') { objects.append(QSet<QString>{}); if (objects.size() > 4) return false; }
     else if (bytes[i] == '}') { if (objects.isEmpty()) return false; objects.removeLast(); }
     else if (bytes[i] == '"') {
       const auto start = i;
@@ -27,7 +27,7 @@ bool uniqueMembers(const QByteArray &bytes) {
       while (next < bytes.size() && (bytes[next] == ' ' || bytes[next] == '\n' || bytes[next] == '\r' || bytes[next] == '\t')) ++next;
       if (next < bytes.size() && bytes[next] == ':') {
         if (objects.isEmpty()) return false;
-        const auto key = QJsonDocument::fromJson("[" + bytes.mid(start, i - start + 1) + "]").array().value(0).toString();
+        const auto key = QJsonDocument::fromJson("[" + bytes.mid(start, i - start + 1) + "]").array().at(0).toString();
         if (objects.last().contains(key)) return false;
         objects.last().insert(key);
       }
@@ -69,7 +69,7 @@ std::optional<Parsed> parse(const QByteArray &bytes) {
   if (!statuses.contains(status) || adapters.size() > 16 || devices.size() > 128) return {};
   if ((status == "ok" && adapters.isEmpty()) || (status == "no_adapter" && !adapters.isEmpty()) ||
       ((status != "ok" && status != "no_adapter") && (!adapters.isEmpty() || !devices.isEmpty()))) return {};
-  Parsed parsed{status, adapters.size(), {}};
+  Parsed parsed{status, static_cast<int>(adapters.size()), {}};
   QSet<QString> adapterIds;
   for (qsizetype i = 0; i < adapters.size(); ++i) {
     const auto value = adapters[i]; if (!value.isObject()) return {};
@@ -133,7 +133,9 @@ void DeviceInventoryProvider::fail(const QString &state, const QString &message)
 }
 void DeviceInventoryProvider::cancel() { if (m_process) fail("cancelled", "Refresh cancelled. The previous snapshot is stale."); }
 void DeviceInventoryProvider::read(QProcess *p, quint64 g, bool stderrChannel) {
-  if (!current(p,g)) return; p->setReadChannel(stderrChannel ? QProcess::StandardError : QProcess::StandardOutput);
+  if (!current(p, g))
+    return;
+  p->setReadChannel(stderrChannel ? QProcess::StandardError : QProcess::StandardOutput);
   auto &buffer = stderrChannel ? m_stderr : m_stdout; const qsizetype maximum = stderrChannel ? MaxStderr : MaxOutput;
   buffer += p->read(maximum - buffer.size() + 1); if (buffer.size() > maximum) fail("invalid_report", "CLI output exceeded the inventory size limit.");
 }
@@ -149,9 +151,18 @@ void DeviceInventoryProvider::refresh() {
   connect(p,&QProcess::readyReadStandardError,this,[this,p,generation]{read(p,generation,true);});
   connect(p,&QProcess::errorOccurred,this,[this,p,generation](QProcess::ProcessError e){if(current(p,generation)) fail(e==QProcess::FailedToStart?"cli_unavailable":"process_error","CLI could not complete the inventory. Check the executable and retry.");});
   connect(p,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this,p,generation](int code,QProcess::ExitStatus exit){
-    if(!current(p,generation)) return; read(p,generation,false); read(p,generation,true); if(!current(p,generation)) return;
+    if (!current(p, generation))
+      return;
+    read(p, generation, false);
+    read(p, generation, true);
+    if (!current(p, generation))
+      return;
     const auto parsed = m_stderr.isEmpty() ? parse(m_stdout) : std::optional<Parsed>{};
-    if(!parsed || (parsed->status == "ok" ? code != 0 : code == 0)) { fail("invalid_report","CLI returned an invalid inventory schema or exit status."); return; }
+    if (!parsed || exit != QProcess::NormalExit ||
+        (parsed->status == "ok" ? code != 0 : code == 0)) {
+      fail("invalid_report", "CLI returned an invalid inventory schema or exit status.");
+      return;
+    }
     retire(); m_devices.replace(parsed->devices); m_adapters=parsed->adapters; m_status=parsed->status; m_state=parsed->status=="ok" ? "loaded" : parsed->status; m_error=statusMessage(parsed->status); m_updated=QDateTime::currentDateTimeUtc(); m_age.start(300000); emit changed();
   });
   m_deadline.start(m_options.timeoutMs); p->start(QIODevice::ReadOnly); emit changed();
