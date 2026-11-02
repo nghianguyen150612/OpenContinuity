@@ -110,3 +110,5 @@ See the [protocol](research/P014_DISCOVERY_STREAM_PROTOCOL.md),
 [UI behavior](research/P014_SETTINGS_LIVE_SCAN_UI.md),
 [privacy review](research/P014_PRIVACY_SECURITY_REVIEW.md), and
 [validation record](P014_VALIDATION.md). Physical Arch discovery remains NOT RUN.
+
+P015's JSONL writer uses a bounded protocol-sized queue and a two-second no-progress deadline; see [the backpressure design](research/P015_STREAM_BACKPRESSURE_DESIGN.md). The BlueZ lifecycle and cleanup remain independent of stdout delivery.

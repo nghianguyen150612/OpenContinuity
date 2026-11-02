@@ -103,3 +103,5 @@ or Watch SE 2 hardware. See the [protocol](research/P014_DISCOVERY_STREAM_PROTOC
 [security review](research/P014_PRIVACY_SECURITY_REVIEW.md),
 [physical plan](research/P014_ARCH_PHYSICAL_PLAN.md), and
 [validation](P014_VALIDATION.md). The original full roadmap remains unavailable.
+
+P015 streaming reliability and Arch qualification remain provisional; physical RF and Watch qualification require separate evidence. See [P015 validation](P015_VALIDATION.md).
