@@ -418,6 +418,43 @@ fn closed_jsonl_consumer_still_releases_owned_discovery() {
 }
 
 #[test]
+fn burst_with_delayed_reader_preserves_order_and_cleanup() {
+    let bus = Bus::new("normal");
+    let mut child = bus.spawn_events("2");
+    let mut stdout = child.stdout.take().unwrap();
+    bus.wait_started(&mut child);
+    // The reader starts after the burst, exercising temporary pipe saturation.
+    for index in 0..100 {
+        let label = format!("Burst {index:03}");
+        bus.event(
+            "/org/bluez/hci0/dev_BURST",
+            "org.bluez.Device1",
+            Some(&label),
+            true,
+        );
+    }
+    thread::sleep(Duration::from_millis(100));
+    let reader = thread::spawn(move || {
+        let mut output = String::new();
+        stdout.read_to_string(&mut output).unwrap();
+        output
+    });
+    assert!(child.wait().unwrap().success());
+    let output = reader.join().unwrap();
+    let events: Vec<serde_json::Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 102);
+    for (index, event) in events.iter().enumerate() {
+        assert_eq!(event["sequence"], (index + 1) as u64);
+    }
+    assert_eq!(events.last().unwrap()["device_event_count"], 100);
+    assert_eq!(events.last().unwrap()["cleanup_status"], "complete");
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+}
+
+#[test]
 fn blocked_jsonl_stdout_terminates_with_bounded_cleanup() {
     let bus = Bus::new("normal");
     let mut child = bus.spawn_events("30");

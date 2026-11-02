@@ -1,0 +1,5 @@
+# P015 discovery lifecycle review
+
+The explicit session pins the BlueZ owner, applies an LE transport filter, issues one StartDiscovery, and observes signals only after its reply. Collection races cancellation and the requested duration. A confirmed acquisition has at most one owned StopDiscovery attempt; an uncertain Start reply is not followed by an unowned Stop. Filter clearing and connection close are bounded. Terminal emission follows cleanup and the writer drain, and a missing or inconsistent terminal is a consumer failure, not success. Connection closure is a fallback, not proof of radio cleanup when BlueZ is unavailable.
+
+The Qt provider buffers complete newline-delimited records as bytes, fences callbacks by process generation, cancels on shutdown, and uses a kill fallback. The report parser validates session, sequence, counts and terminal/exit consistency. Observations remain unverified. Further adversarial Qt and owner-loss-under-pressure testing is required before qualification.

@@ -57,3 +57,5 @@ software gates; see [P011 validation](P011_VALIDATION.md). Wayland/X11 use norma
 Qt plugins but real compositor qualification is separate from offscreen tests.
 P007–P010 research remains informational, hardware unverified and production
 unsupported. No Linux unlock or authorization is available.
+
+P015 adds a read-only Arch/BlueZ preflight; physical discovery, RF, GUI, and Watch stages are not qualified by it. See [qualification](research/P015_ARCH_BLUEZ_QUALIFICATION.md).

@@ -124,3 +124,5 @@ See the [event protocol](docs/research/P014_DISCOVERY_STREAM_PROTOCOL.md),
 [Arch physical plan](docs/research/P014_ARCH_PHYSICAL_PLAN.md), and
 [validation](docs/P014_VALIDATION.md). Physical Arch discovery is NOT RUN;
 Watch SE 2 qualification remains NO-GO. Native Apple features remain unsupported.
+
+For a read-only, sanitized Arch/BlueZ preflight and a separately opt-in physical qualification procedure, see [P015 Arch qualification](docs/research/P015_ARCH_BLUEZ_QUALIFICATION.md). No scan is started by the preflight.

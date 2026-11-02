@@ -85,3 +85,5 @@ See [stream protocol](../../docs/research/P014_DISCOVERY_STREAM_PROTOCOL.md),
 [live UI behavior](../../docs/research/P014_SETTINGS_LIVE_SCAN_UI.md), and
 [validation](../../docs/P014_VALIDATION.md). Software fixtures do not establish
 Arch RF behavior or Watch SE 2 interoperability.
+
+Live discovery results are unverified. A missing or inconsistent terminal or forced process termination leaves cleanup uncertain. The optional [Arch preflight](../../docs/research/P015_ARCH_BLUEZ_QUALIFICATION.md) does not start a scan.

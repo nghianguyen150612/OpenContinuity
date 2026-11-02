@@ -125,3 +125,5 @@ buffers are not a full memory sandbox, and forced death cannot prove explicit
 StopDiscovery. No pairing, connection, trust mutation, telemetry, authorization,
 or Apple identity is added. See the [P014 privacy/security review](research/P014_PRIVACY_SECURITY_REVIEW.md)
 and [lifecycle limits](research/P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md).
+
+P015 preflight does not start discovery or change adapter state. Physical scan output may contain identifying names and must be handled according to the [evidence policy](research/P015_PRIVACY_EVIDENCE_POLICY.md). BlueZ observations do not establish identity, proximity, or authorization.

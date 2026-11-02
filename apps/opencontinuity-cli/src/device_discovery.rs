@@ -20,6 +20,9 @@ pub const SETUP_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const OUTPUT_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const TERMINAL_RESERVE_BYTES: usize = MAX_JSONL_RECORD_BYTES;
+// A session, every permitted device record, and the terminal fit without
+// waiting for the writer. The total serialized output is independently capped.
+const WRITER_QUEUE_CAPACITY: usize = MAX_DEVICE_RECORDS + 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -201,9 +204,9 @@ struct WriterState {
     failed: AtomicU8,
 }
 
-/// A one-record queue keeps blocked stdout from growing memory or blocking the
-/// asynchronous BlueZ event loop. The producer checks write progress while it
-/// collects, and the CLI exits after bounded cleanup if the consumer stalls.
+/// The bounded queue accommodates the entire protocol record budget, so a burst
+/// never blocks the BlueZ loop. Acknowledged writes reset the stall deadline;
+/// a writer that makes no progress causes bounded cleanup and process exit.
 struct EventStream {
     session_id: String,
     sender: SyncSender<WriteItem>,
@@ -211,13 +214,15 @@ struct EventStream {
     sequence: u32,
     total_bytes: usize,
     device_records: usize,
-    pending: VecDeque<(u32, Instant)>,
+    pending: VecDeque<u32>,
+    last_completed: u32,
+    progress_at: Instant,
     session_emitted: bool,
 }
 
 impl EventStream {
     fn new(session_id: String) -> Self {
-        let (sender, receiver) = mpsc::sync_channel::<WriteItem>(1);
+        let (sender, receiver) = mpsc::sync_channel::<WriteItem>(WRITER_QUEUE_CAPACITY);
         let writer = Arc::new(WriterState {
             completed: AtomicU32::new(0),
             failed: AtomicU8::new(0),
@@ -244,6 +249,8 @@ impl EventStream {
             total_bytes: 0,
             device_records: 0,
             pending: VecDeque::new(),
+            last_completed: 0,
+            progress_at: Instant::now(),
             session_emitted: false,
         }
     }
@@ -261,18 +268,18 @@ impl EventStream {
             return Err(Status::OutputClosed);
         }
         let completed = self.writer.completed.load(Ordering::Acquire);
+        if completed > self.last_completed {
+            self.last_completed = completed;
+            self.progress_at = Instant::now();
+        }
         while self
             .pending
             .front()
-            .is_some_and(|(sequence, _)| *sequence <= completed)
+            .is_some_and(|sequence| *sequence <= completed)
         {
             self.pending.pop_front();
         }
-        if self
-            .pending
-            .front()
-            .is_some_and(|(_, queued)| queued.elapsed() >= OUTPUT_WRITE_TIMEOUT)
-        {
+        if !self.pending.is_empty() && self.progress_at.elapsed() >= OUTPUT_WRITE_TIMEOUT {
             return Err(Status::OutputBlocked);
         }
         Ok(())
@@ -307,7 +314,10 @@ impl EventStream {
         }
         self.total_bytes += line_bytes;
         self.sequence = self.sequence.saturating_add(1);
-        self.pending.push_back((sequence, Instant::now()));
+        if self.pending.is_empty() {
+            self.progress_at = Instant::now();
+        }
+        self.pending.push_back(sequence);
         Ok(())
     }
 
@@ -1112,7 +1122,7 @@ mod linux {
         report: &mut Report,
     ) -> Result<(), Status> {
         if !stream.session_emitted {
-            if let Err(status) = wait_for_drain(stream, OUTPUT_WRITE_TIMEOUT).await {
+            if let Err(status) = wait_for_drain(stream).await {
                 report.status = status;
                 report.scan_completed = false;
                 return Err(status);
@@ -1123,7 +1133,7 @@ mod linux {
                 return Err(status);
             }
         }
-        if let Err(status) = wait_for_drain(stream, OUTPUT_WRITE_TIMEOUT).await {
+        if let Err(status) = wait_for_drain(stream).await {
             report.status = status;
             report.scan_completed = false;
             return Err(status);
@@ -1133,7 +1143,7 @@ mod linux {
             report.scan_completed = false;
             return Err(status);
         }
-        if let Err(status) = wait_for_drain(stream, OUTPUT_WRITE_TIMEOUT).await {
+        if let Err(status) = wait_for_drain(stream).await {
             // The terminal may have reached stdout, but an undrained write is
             // not a confirmed successful CLI result. Consumers reject the
             // resulting exit/terminal mismatch and mark cleanup uncertain.
@@ -1144,14 +1154,10 @@ mod linux {
         Ok(())
     }
 
-    async fn wait_for_drain(stream: &mut EventStream, timeout: Duration) -> Result<(), Status> {
-        let deadline = Instant::now() + timeout;
+    async fn wait_for_drain(stream: &mut EventStream) -> Result<(), Status> {
         loop {
             if stream.drained()? {
                 return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err(Status::OutputBlocked);
             }
             async_io::Timer::after(Duration::from_millis(10)).await;
         }
@@ -1164,6 +1170,38 @@ mod tests {
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| (*s).into()).collect()
     }
+    #[test]
+    fn writer_deadline_tracks_acknowledged_progress() {
+        let (sender, _receiver) = mpsc::sync_channel(WRITER_QUEUE_CAPACITY);
+        let writer = Arc::new(WriterState {
+            completed: AtomicU32::new(0),
+            failed: AtomicU8::new(0),
+        });
+        let mut stream = EventStream {
+            session_id: "test".into(),
+            sender,
+            writer: writer.clone(),
+            sequence: 1,
+            total_bytes: 0,
+            device_records: 0,
+            pending: VecDeque::new(),
+            last_completed: 0,
+            progress_at: Instant::now(),
+            session_emitted: false,
+        };
+        for _ in 0..200 {
+            stream.emit(&"burst", false).unwrap();
+        }
+        stream.progress_at = Instant::now() - OUTPUT_WRITE_TIMEOUT;
+        writer.completed.store(1, Ordering::Release);
+        assert_eq!(stream.check(), Ok(()));
+        assert_eq!(stream.pending.len(), 199);
+        stream.progress_at = Instant::now() - OUTPUT_WRITE_TIMEOUT;
+        assert_eq!(stream.check(), Err(Status::OutputBlocked));
+        writer.failed.store(1, Ordering::Release);
+        assert_eq!(stream.check(), Err(Status::OutputClosed));
+    }
+
     #[test]
     fn explicit_options_and_bounds() {
         assert_eq!(
