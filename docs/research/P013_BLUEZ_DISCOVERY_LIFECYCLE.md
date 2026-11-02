@@ -74,3 +74,7 @@ verified RF sighting or an attested LE-only event. Records say
 authenticated. A successful empty scan does not prove an absence of peripherals.
 
 Reference: [BlueZ Adapter1 public API](https://github.com/bluez/bluez/blob/master/doc/org.bluez.Adapter.rst).
+
+P014 adds an incremental JSONL presentation mode over this same lifecycle. It
+does not add a BlueZ connection or StartDiscovery call. See the [P014 stream
+lifecycle and backpressure design](P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md).

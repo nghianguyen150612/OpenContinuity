@@ -74,8 +74,11 @@ ScrollView {
             BusyIndicator { visible: deviceDiscovery.scanning; running: visible; implicitWidth: 28; implicitHeight: 28 }
             Label { objectName: "discoveryStatus"; text: deviceDiscovery.message; textFormat: Text.PlainText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Label { text: "Duration: " + deviceDiscovery.requestedSeconds + " seconds requested · " + (deviceDiscovery.scanning ? deviceDiscovery.elapsedSeconds.toFixed(1) + " seconds elapsed (including setup)" : deviceDiscovery.durationKnown ? deviceDiscovery.elapsedSeconds.toFixed(1) + " seconds of reported observation" : "observation duration unavailable"); wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            Label { visible: deviceDiscovery.state !== "idle"; text: "Cleanup: " + (deviceDiscovery.cleanupStatus === "complete" ? "confirmed after the CLI terminal report" : deviceDiscovery.cleanupStatus === "incomplete" ? "unknown or incomplete; displayed observations are stale" : deviceDiscovery.cleanupStatus === "not_needed" ? "no discovery session was acquired" : "pending"); textFormat: Text.PlainText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Label { objectName: "discoveryCleanup"; visible: deviceDiscovery.cleanupStatus === "incomplete"; text: "Cleanup warning: the owned session could not be confirmed released. D-Bus disconnect is the fallback; forced termination cannot confirm StopDiscovery."; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.weight: Font.Bold }
             Label { visible: deviceDiscovery.devices.stale; text: "Previous scan results (stale or partial)"; Layout.fillWidth: true; wrapMode: Text.WordWrap; font.weight: Font.DemiBold }
+            Label { objectName: "unverifiedObservationsHeading"; text: "Unverified BlueZ observations"; font.weight: Font.Bold; font.pixelSize: 18; Layout.fillWidth: true }
+            Label { objectName: "unverifiedObservationsSummary"; text: "Live observed-device count: " + deviceDiscovery.devices.count + " · Source: BlueZ events during this scan · Trust: unverified; identity and proximity are not evaluated."; textFormat: Text.PlainText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Repeater {
                 model: deviceDiscovery.devices
                 delegate: Card {
@@ -87,6 +90,7 @@ ScrollView {
                     detail: "A BlueZ device event occurred during this session. This is not verified RF evidence, Apple identity, authentication or Linux authorization."
                 }
             }
+            Label { objectName: "emptyDiscoveryResult"; visible: deviceDiscovery.state === "completed" && deviceDiscovery.devices.count === 0; text: "No observations were received during this scan. This does not prove no devices are nearby."; textFormat: Text.PlainText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Label { text: "Known-device inventory"; font.weight: Font.Bold; font.pixelSize: 18; Layout.fillWidth: true }
             Label { text: "BlueZ known devices — no Bluetooth scan performed."; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.weight: Font.DemiBold }
             Button {

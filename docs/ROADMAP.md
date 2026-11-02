@@ -88,4 +88,18 @@ P013 implements manual 1–30 second discovery and a separate Settings Scan/Canc
 workflow, preserving read-only inventory and unsupported Apple capabilities.
 Software, final-head CI and physical evidence are recorded separately in
 [P013 validation](P013_VALIDATION.md). The original full roadmap remains unavailable.
-Physical Arch discovery is NOT RUN; P010 remains NO-GO. P014 is not started.
+Physical Arch discovery is NOT RUN; P010 remains NO-GO.
+
+## P014 — live discovery stream (provisional)
+
+P014 adds a versioned JSONL mode over the existing P013 discovery lifecycle and
+incremental Settings model updates. It keeps `--json`, P012 inventory, explicit
+scan opt-in, and owned Start/Stop cleanup intact. Output backpressure, bounded
+records, session/sequence validation, cancellation and stale-result handling
+are covered by implementation tests. This milestone does not qualify Arch RF
+or Watch SE 2 hardware. See the [protocol](research/P014_DISCOVERY_STREAM_PROTOCOL.md),
+[lifecycle](research/P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md),
+[UI behavior](research/P014_SETTINGS_LIVE_SCAN_UI.md),
+[security review](research/P014_PRIVACY_SECURITY_REVIEW.md),
+[physical plan](research/P014_ARCH_PHYSICAL_PLAN.md), and
+[validation](P014_VALIDATION.md). The original full roadmap remains unavailable.

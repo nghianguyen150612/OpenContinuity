@@ -15,6 +15,10 @@ public:
   int count() const { return m_rows.size(); }
   bool stale() const { return m_stale; }
   void replace(QList<DiscoveryRow> rows);
+  void clear();
+  bool contains(const QString &id) const;
+  QString displayName(const QString &id) const;
+  void upsert(DiscoveryRow row);
   void markStale();
 signals:
   void changed();

@@ -89,3 +89,24 @@ Fixed asynchronous process arguments, strict schema v1 validation, graceful
 cancellation and uncertain-cleanup fallback keep radio ownership visible.
 See [lifecycle](research/P013_BLUEZ_DISCOVERY_LIFECYCLE.md) and
 [UI behavior](research/P013_SETTINGS_SCAN_UI.md).
+
+## P014 — live event presentation
+
+P014 adds a second explicit CLI format, `devices discover --events-jsonl`, while
+leaving P013's final `--json` report path intact. A bounded writer thread streams
+events from the same async production state machine and true in-memory
+observation map. The Rust path does not open another D-Bus connection or call
+StartDiscovery twice. It emits a cleanup-authoritative terminal only after the
+owned session cleanup and connection release have been attempted.
+
+The native `DeviceDiscoveryProvider` consumes complete JSONL lines
+incrementally, validates event order/session/sequence/counts and terminal/exit
+agreement, and upserts observations into its separate live model. Settings
+retains the P012 inventory model. Output blockage or malformed/missing terminal
+data marks rows stale and does not claim cleanup. P014 adds no pairing,
+connection, trust write, authorization, identity claim, or automatic scan.
+See the [protocol](research/P014_DISCOVERY_STREAM_PROTOCOL.md),
+[backpressure design](research/P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md),
+[UI behavior](research/P014_SETTINGS_LIVE_SCAN_UI.md),
+[privacy review](research/P014_PRIVACY_SECURITY_REVIEW.md), and
+[validation record](P014_VALIDATION.md). Physical Arch discovery remains NOT RUN.

@@ -31,6 +31,7 @@ private slots:
     QTest::addColumn<QString>("inventoryOutcome");
     QTest::addColumn<QString>("discoveryOutcome");
     QTest::newRow("loaded-light") << false << false << QString("sample") << QString("sample");
+    QTest::newRow("live-observation-update") << false << false << QString("sample") << QString("live_update");
     QTest::newRow("loaded-dark") << false << true << QString("sample") << QString("sample");
     QTest::newRow("successful-empty-inventory") << false << false << QString("empty") << QString("empty");
     QTest::newRow("missing-bluez") << false << false << QString("bluez_unavailable") << QString("bluez_unavailable");
@@ -139,11 +140,21 @@ private slots:
     QVERIFY(scan);
     qputenv("OC_DISCOVERY_MODE", discoveryOutcome.toUtf8());
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, scan->mapToScene(QPointF(scan->width()/2,scan->height()/2)).toPoint());
-    const auto expectedDiscovery = unavailable ? QString("cli_unavailable") : discoveryOutcome == "sample" || discoveryOutcome == "empty" ? QString("completed") : discoveryOutcome;
+    if (!unavailable && discoveryOutcome == "live_update") {
+      QTRY_VERIFY(discovery.devices()->count() == 1);
+      QCOMPARE(discovery.devices()->displayName("scan-0123456789abcdef-001"), "Watch");
+      QTRY_COMPARE(discovery.devices()->displayName("scan-0123456789abcdef-001"), "Renamed watch");
+      QVERIFY(discovery.scanning());
+      QVERIFY(window->findChild<QQuickItem *>("unverifiedObservationsHeading"));
+      QVERIFY(window->findChild<QObject *>("unverifiedObservationsSummary")->property("text").toString().contains("count: 1"));
+      QCOMPARE(inventory.devices()->count(), 0);
+    }
+    const auto expectedDiscovery = unavailable ? QString("cli_unavailable") : discoveryOutcome == "sample" || discoveryOutcome == "empty" || discoveryOutcome == "live_update" ? QString("completed") : discoveryOutcome;
     QTRY_COMPARE(discovery.state(), expectedDiscovery);
     auto *discoveryStatus = window->findChild<QObject *>("discoveryStatus"); QVERIFY(discoveryStatus);
     if (!unavailable && discoveryOutcome == "empty") QVERIFY(discoveryStatus->property("text").toString().contains("No observations"));
     if (!unavailable && discoveryOutcome == "sample") QCOMPARE(discovery.devices()->count(),1);
+    if (!unavailable && discoveryOutcome == "live_update") QCOMPARE(discovery.devices()->count(),1);
     if (!unavailable && discoveryOutcome == "cleanup_incomplete") QVERIFY(window->findChild<QQuickItem *>("discoveryCleanup")->isVisible());
     if (!unavailable) {
       QTest::qWait(50); // Allow Controls/layout bindings to settle before another click.
