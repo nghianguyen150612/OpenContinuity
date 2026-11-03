@@ -127,3 +127,8 @@ or Apple identity is added. See the [P014 privacy/security review](research/P014
 and [lifecycle limits](research/P014_STREAM_LIFECYCLE_AND_BACKPRESSURE.md).
 
 P015 preflight does not start discovery or change adapter state. Physical scan output may contain identifying names and must be handled according to the [evidence policy](research/P015_PRIVACY_EVIDENCE_POLICY.md). BlueZ observations do not establish identity, proximity, or authorization.
+
+P016 adds adversarial production stream and Qt lifecycle tests plus a local,
+privacy-safe evidence validator. See [P016 validation](P016_VALIDATION.md). Software fixtures
+do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
+hardware gates remain NOT RUN and Watch remains NO-GO.

@@ -75,6 +75,19 @@ int main(int argc, char **argv) {
       auto final = terminal(2, mode, "not_needed", false, 0, 0, false, 0);
       write(final); return 1;
     }
+    if (mode == "crash") { std::raise(SIGKILL); }
+    if (mode == "burst" || mode == "burst_cancel" || mode == "burst_hang" || mode == "partial_terminal") {
+      for (int i = 0; i < 200; ++i) write(device(i + 2, QString("Burst %1").arg(i), i == 0 ? "observed" : "updated"));
+      if (mode == "burst_hang") { while (true) QThread::msleep(10); }
+      if (mode == "burst_cancel") {
+        while (!cancelled) QThread::msleep(10);
+        write(terminal(202, "cancelled", "complete", true, 1, 200, false, 100)); return 1;
+      }
+      QThread::msleep(300); // The UI must expose live rows before completion.
+      auto bytes = QJsonDocument(terminal(202, "completed", "complete", true, 1, 200, true, 10000)).toJson(QJsonDocument::Compact);
+      if (mode == "partial_terminal") { std::fwrite(bytes.data(), 1, bytes.size()/2, stdout); return 0; }
+      write(terminal(202, "completed", "complete", true, 1, 200, true, 10000)); return 0;
+    }
     if (mode == "hang") { while (true) QThread::msleep(10); }
     if (mode == "cancel") {
       while (!cancelled) QThread::msleep(10);

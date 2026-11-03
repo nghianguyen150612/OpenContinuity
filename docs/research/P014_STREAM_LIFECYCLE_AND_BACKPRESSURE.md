@@ -63,3 +63,7 @@ Existing P013 mock tests still cover owner loss, lost Start replies, negative
 Start, duplicate signals, event/device caps, cleanup failures, and another
 client's session surviving our Stop. The `--json` command continues to use the
 same P013 report serializer and cleanup path.
+
+P015 supersedes the original one-record queue/deadline design above with a
+514-record queue and acknowledged-write progress deadline. See
+[P016 audit and test matrix](P016_ADVERSARIAL_STREAM_TEST_MATRIX.md).

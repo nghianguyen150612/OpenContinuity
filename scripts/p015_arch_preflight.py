@@ -30,7 +30,7 @@ def os_release():
 
 
 def preflight():
-    report = {"environment": {"system": platform.system(), "kernel": platform.release(), "os": os_release()},
+    report = {"schema_version": 1, "environment": {"system": platform.system(), "kernel": platform.release(), "os": os_release()},
               "bluez_version": "unavailable", "system_bus": "blocked_or_unavailable",
               "adapters": [], "cli_version": "unavailable", "settings": "unavailable",
               "discovery_session": "not_run", "stream_delivery": "not_run",

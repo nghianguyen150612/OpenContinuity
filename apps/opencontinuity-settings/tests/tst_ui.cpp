@@ -32,6 +32,8 @@ private slots:
     QTest::addColumn<QString>("discoveryOutcome");
     QTest::newRow("loaded-light") << false << false << QString("sample") << QString("sample");
     QTest::newRow("live-observation-update") << false << false << QString("sample") << QString("live_update");
+    QTest::newRow("burst-live") << false << false << QString("sample") << QString("burst");
+    QTest::newRow("partial-terminal") << false << false << QString("sample") << QString("partial_terminal");
     QTest::newRow("loaded-dark") << false << true << QString("sample") << QString("sample");
     QTest::newRow("successful-empty-inventory") << false << false << QString("empty") << QString("empty");
     QTest::newRow("missing-bluez") << false << false << QString("bluez_unavailable") << QString("bluez_unavailable");
@@ -68,7 +70,7 @@ private slots:
     const auto inventoryCli = unavailable ? QString("/nonexistent/opencontinuity")
         : qEnvironmentVariable("OC_INVENTORY_CLI", QCoreApplication::applicationDirPath() + "/doctor-fixture");
     DeviceInventoryProvider inventory({inventoryCli});
-    DeviceDiscoveryProvider discovery({inventoryCli});
+    DeviceDiscoveryProvider discovery({inventoryCli, 22000, 200});
     qmlRegisterUncreatableType<StatusModel>("OpenContinuity.Backend", 1, 0,
                                             "StatusModel", "Owned");
     qmlRegisterUncreatableType<DoctorProvider>("OpenContinuity.Backend", 1, 0,
@@ -149,16 +151,25 @@ private slots:
       QVERIFY(window->findChild<QObject *>("unverifiedObservationsSummary")->property("text").toString().contains("count: 1"));
       QCOMPARE(inventory.devices()->count(), 0);
     }
-    const auto expectedDiscovery = unavailable ? QString("cli_unavailable") : discoveryOutcome == "sample" || discoveryOutcome == "empty" || discoveryOutcome == "live_update" ? QString("completed") : discoveryOutcome;
+    if (!unavailable && discoveryOutcome == "burst") {
+      QTRY_COMPARE(discovery.devices()->displayName("scan-0123456789abcdef-001"), "Burst 199");
+      QVERIFY(discovery.scanning());
+      QVERIFY(window->findChild<QObject *>("unverifiedObservationsSummary")->property("text").toString().contains("count: 1"));
+    }
+    const auto expectedDiscovery = unavailable ? QString("cli_unavailable") : discoveryOutcome == "sample" || discoveryOutcome == "empty" || discoveryOutcome == "live_update" || discoveryOutcome == "burst" ? QString("completed") : discoveryOutcome == "partial_terminal" ? QString("failed") : discoveryOutcome;
     QTRY_COMPARE(discovery.state(), expectedDiscovery);
     auto *discoveryStatus = window->findChild<QObject *>("discoveryStatus"); QVERIFY(discoveryStatus);
+    if (!unavailable && discoveryOutcome == "partial_terminal") {
+      QCOMPARE(discovery.cleanupStatus(), "incomplete"); QVERIFY(discovery.devices()->stale());
+      QVERIFY(window->findChild<QQuickItem *>("discoveryCleanup")->isVisible());
+    }
     if (!unavailable && discoveryOutcome == "empty") QVERIFY(discoveryStatus->property("text").toString().contains("No observations"));
     if (!unavailable && discoveryOutcome == "sample") QCOMPARE(discovery.devices()->count(),1);
     if (!unavailable && discoveryOutcome == "live_update") QCOMPARE(discovery.devices()->count(),1);
     if (!unavailable && discoveryOutcome == "cleanup_incomplete") QVERIFY(window->findChild<QQuickItem *>("discoveryCleanup")->isVisible());
     if (!unavailable) {
       QTest::qWait(50); // Allow Controls/layout bindings to settle before another click.
-      qputenv("OC_DISCOVERY_MODE", "cancel");
+      qputenv("OC_DISCOVERY_MODE", "burst_cancel");
       QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, scan->mapToScene(QPointF(scan->width()/2,scan->height()/2)).toPoint());
       QTRY_VERIFY(discovery.scanning()); QTest::qWait(100);
       auto *cancel = window->findChild<QQuickItem *>("cancelBluetoothScan"); QVERIFY(cancel); QVERIFY(cancel->isVisible());
@@ -225,7 +236,13 @@ private slots:
     if (!output.isEmpty() && !unavailable)
       QVERIFY(window->grabWindow().save(dark ? output + ".dark.png" : output));
     QCOMPARE(warnings.count(), 0);
-    window->close();
+    if (!unavailable) {
+      window->setProperty("currentPage", 1); qputenv("OC_DISCOVERY_MODE", "burst_hang");
+      discovery.scan(); QTRY_COMPARE(discovery.devices()->count(), 1);
+      window->close(); QVERIFY(discovery.cancelling());
+      QTRY_VERIFY_WITH_TIMEOUT(!discovery.scanning(), 3000);
+      QCOMPARE(discovery.cleanupStatus(), "incomplete"); QVERIFY(discovery.devices()->stale());
+    } else window->close();
   }
 };
 int main(int argc, char **argv) {

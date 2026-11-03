@@ -112,3 +112,8 @@ See the [protocol](research/P014_DISCOVERY_STREAM_PROTOCOL.md),
 [validation record](P014_VALIDATION.md). Physical Arch discovery remains NOT RUN.
 
 P015's JSONL writer uses a bounded protocol-sized queue and a two-second no-progress deadline; see [the backpressure design](research/P015_STREAM_BACKPRESSURE_DESIGN.md). The BlueZ lifecycle and cleanup remain independent of stdout delivery.
+
+P016 adds adversarial production stream and Qt lifecycle tests plus a local,
+privacy-safe evidence validator. See [P016 validation](P016_VALIDATION.md). Software fixtures
+do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
+hardware gates remain NOT RUN and Watch remains NO-GO.

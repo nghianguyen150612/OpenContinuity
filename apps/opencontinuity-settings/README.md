@@ -87,3 +87,8 @@ See [stream protocol](../../docs/research/P014_DISCOVERY_STREAM_PROTOCOL.md),
 Arch RF behavior or Watch SE 2 interoperability.
 
 Live discovery results are unverified. A missing or inconsistent terminal or forced process termination leaves cleanup uncertain. The optional [Arch preflight](../../docs/research/P015_ARCH_BLUEZ_QUALIFICATION.md) does not start a scan.
+
+P016 adds adversarial production stream and Qt lifecycle tests plus a local,
+privacy-safe evidence validator. See [P016 validation](../../docs/P016_VALIDATION.md). Software fixtures
+do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
+hardware gates remain NOT RUN and Watch remains NO-GO.

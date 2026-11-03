@@ -53,6 +53,9 @@ impl Adapter {
         let caller = header.sender().unwrap().to_string();
         if filter.is_empty() {
             self.calls.lock().unwrap().push(("clear".into(), caller));
+            if self.mode == "terminal_gate" {
+                thread::sleep(Duration::from_millis(300));
+            }
             if self.mode == "clear_fail" {
                 return Err(Error::Failed("private failure".into()));
             }
@@ -87,6 +90,9 @@ impl Adapter {
             .lock()
             .unwrap()
             .push(("stop".into(), caller.clone()));
+        if self.mode == "slow_stop" {
+            thread::sleep(Duration::from_millis(300));
+        }
         if self.mode == "stop_fail" {
             return Err(Error::Failed("private cleanup failure".into()));
         }
@@ -799,4 +805,273 @@ fn malformed_activity_fails_closed_then_cleans_up() {
     let r = report(child.wait_with_output().unwrap(), "malformed_data");
     assert!(r["devices"].as_array().unwrap().is_empty());
     assert_eq!(r["cleanup_status"], "complete");
+}
+
+// P016: all waits have watchdogs, and every child uses a private fake bus.
+fn bounded_wait(child: &mut Child) -> std::process::ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("spawned CLI exceeded watchdog");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+fn pressure(bus: &Bus, count: usize) {
+    for i in 0..count {
+        bus.event(
+            &format!("{PATH}/dev_{}", i % 100),
+            "org.bluez.Device1",
+            Some(&format!("Observation {i:03}")),
+            true,
+        );
+    }
+}
+fn validate_events(bytes: &[u8], count: usize, status: &str) {
+    assert!(bytes.ends_with(b"\n"));
+    let events: Vec<serde_json::Value> = std::str::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(events.len(), count + 2);
+    for (i, event) in events.iter().enumerate() {
+        assert_eq!(event["sequence"], i + 1);
+        assert_eq!(event["scan_session_id"], events[0]["scan_session_id"]);
+        assert_eq!(event["authorization"], "never_evaluated");
+    }
+    for i in 0..count {
+        assert_eq!(events[i + 1]["display_name"], format!("Observation {i:03}"));
+        assert_eq!(
+            events[i + 1]["change"],
+            if i < 100 { "observed" } else { "updated" }
+        );
+    }
+    let end = events.last().unwrap();
+    assert_eq!(end["type"], "terminal");
+    assert_eq!(end["status"], status);
+    assert_eq!(end["device_count"], count.min(100));
+    assert_eq!(end["device_event_count"], count);
+    assert_eq!(end["cleanup_status"], "complete");
+}
+#[test]
+fn continuous_slow_reader_and_full_record_budget_preserve_every_event() {
+    for count in [200, 512, 513] {
+        let bus = Bus::new("normal");
+        let mut child = bus.spawn_events("1");
+        let mut stdout = child.stdout.take().unwrap();
+        assert_eq!(
+            unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETPIPE_SZ, 4096) },
+            4096
+        );
+        bus.wait_started(&mut child);
+        pressure(&bus, count);
+        let reader = thread::spawn(move || {
+            let mut all = Vec::new();
+            let mut chunk = [0u8; 512];
+            loop {
+                let n = stdout.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break;
+                }
+                all.extend_from_slice(&chunk[..n]);
+                thread::sleep(Duration::from_millis(10));
+            }
+            all
+        });
+        let status = bounded_wait(&mut child);
+        assert_eq!(status.code(), Some(if count > 512 { 1 } else { 0 }));
+        validate_events(
+            &reader.join().unwrap(),
+            count.min(512),
+            if count > 512 {
+                "data_limit"
+            } else {
+                "completed"
+            },
+        );
+        assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+    }
+}
+#[test]
+fn signals_owner_loss_and_bus_loss_while_stdout_is_pending() {
+    for action in ["int", "term", "owner", "bus", "blocked_int", "blocked_term"] {
+        let mut bus = Bus::new("normal");
+        let mut child = bus.spawn_events("30");
+        assert_eq!(
+            unsafe {
+                libc::fcntl(
+                    child.stdout.as_ref().unwrap().as_raw_fd(),
+                    libc::F_SETPIPE_SZ,
+                    4096,
+                )
+            },
+            4096
+        );
+        bus.wait_started(&mut child);
+        pressure(&bus, 200);
+        // No reader: the 200 records exceed the 4 KiB pipe capacity.
+        let _replacement = if action == "owner" {
+            bus.service.release_name("org.bluez").unwrap();
+            Some(
+                Builder::address(bus.address.as_str())
+                    .unwrap()
+                    .name("org.bluez")
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        if action == "owner" {
+            // Keep the replacement alive while cleanup must target the old unique peer.
+        } else if action == "bus" {
+            bus.daemon.kill().unwrap();
+            bus.daemon.wait().unwrap();
+        } else {
+            assert_eq!(
+                unsafe {
+                    libc::kill(
+                        child.id() as i32,
+                        if action.ends_with("int") {
+                            libc::SIGINT
+                        } else {
+                            libc::SIGTERM
+                        },
+                    )
+                },
+                0
+            );
+        }
+        if action.starts_with("blocked") {
+            assert_eq!(bounded_wait(&mut child).code(), Some(1));
+        } else {
+            let mut stdout = child.stdout.take().unwrap();
+            let reader = thread::spawn(move || {
+                let mut b = Vec::new();
+                stdout.read_to_end(&mut b).unwrap();
+                b
+            });
+            assert_eq!(bounded_wait(&mut child).code(), Some(1));
+            let bytes = reader.join().unwrap();
+            let events: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+            for (i, e) in events.iter().enumerate() {
+                assert_eq!(e["sequence"], i + 1);
+            }
+            for (i, event) in events[1..events.len() - 1].iter().enumerate() {
+                assert_eq!(event["display_name"], format!("Observation {i:03}"));
+            }
+            let end = events.last().unwrap();
+            assert_eq!(end["type"], "terminal");
+            assert_eq!(end["device_event_count"], events.len() - 2);
+            assert_eq!(
+                end["status"],
+                if action == "owner" || action == "bus" {
+                    "bluez_unavailable"
+                } else {
+                    "cancelled"
+                }
+            );
+            assert_eq!(
+                end["cleanup_status"],
+                if action == "bus" {
+                    "incomplete"
+                } else {
+                    "complete"
+                }
+            );
+        }
+        if action != "bus" {
+            assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+        }
+    }
+}
+#[test]
+fn consumer_closes_after_cleanup_before_terminal() {
+    let bus = Bus::new("terminal_gate");
+    let mut child = bus.spawn_events("1");
+    bus.wait_started(&mut child);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !bus.names().contains(&"clear".to_string()) {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    drop(child.stdout.take());
+    assert_eq!(bounded_wait(&mut child).code(), Some(1));
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+}
+#[test]
+fn partial_terminal_file_write_after_cleanup_is_failure() {
+    use std::os::unix::process::CommandExt;
+    let bus = Bus::new("normal");
+    let path = std::env::temp_dir().join(format!("oc-p016-{}", bus.daemon.id()));
+    let file = std::fs::File::create(&path).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_opencontinuity"));
+    cmd.args(["devices", "discover", "--seconds", "1", "--events-jsonl"])
+        .env("DBUS_SYSTEM_BUS_ADDRESS", &bus.address)
+        .stdout(file)
+        .stderr(Stdio::null());
+    // A regular file permits a deterministic partial write, unlike PIPE_BUF-atomic
+    // terminal records on a pipe. The production stdout writer is unchanged.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+            let limit = libc::rlimit {
+                rlim_cur: 450,
+                rlim_max: 450,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().unwrap();
+    bus.wait_started(&mut child);
+    assert_eq!(bounded_wait(&mut child).code(), Some(1));
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(bytes.len(), 450);
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let mut lines = text.split('\n');
+    let session: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert_eq!(session["type"], "session");
+    assert!(serde_json::from_str::<serde_json::Value>(lines.next().unwrap()).is_err());
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
+}
+
+#[test]
+fn signals_arriving_during_stop_cannot_starve_cleanup_replies() {
+    let bus = Bus::new("slow_stop");
+    let mut child = bus.spawn_events("30");
+    bus.wait_started(&mut child);
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !bus.names().contains(&"stop".to_string()) {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(2));
+    }
+    // Stop has been received but its reply is deliberately delayed. Fill the
+    // former 64-slot subscription before that reply. These post-cancel signals
+    // must not become accepted observations or prevent cleanup acknowledgement.
+    pressure(&bus, 200);
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    assert_eq!(bounded_wait(&mut child).code(), Some(1));
+    validate_events(&reader.join().unwrap(), 0, "cancelled");
+    assert_eq!(bus.names(), ["filter_le", "start", "stop", "clear"]);
 }

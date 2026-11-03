@@ -126,3 +126,8 @@ See the [event protocol](docs/research/P014_DISCOVERY_STREAM_PROTOCOL.md),
 Watch SE 2 qualification remains NO-GO. Native Apple features remain unsupported.
 
 For a read-only, sanitized Arch/BlueZ preflight and a separately opt-in physical qualification procedure, see [P015 Arch qualification](docs/research/P015_ARCH_BLUEZ_QUALIFICATION.md). No scan is started by the preflight.
+
+P016 adds adversarial production stream and Qt lifecycle tests plus a local,
+privacy-safe evidence validator. See [P016 validation](docs/P016_VALIDATION.md). Software fixtures
+do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
+hardware gates remain NOT RUN and Watch remains NO-GO.

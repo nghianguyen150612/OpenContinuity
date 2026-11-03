@@ -1,6 +1,6 @@
 # P016 — BLE Adversarial Reliability & Linux Qualification Evidence (Provisional)
 
-**Status:** STARTED — branch and specification created; implementation, new tests, PR and P016 CI NOT STARTED.
+**Status:** Implementation and adversarial coverage added; see [P016 validation](../P016_VALIDATION.md) for executed results, delivery and remaining physical gates.
 **Branch:** `feat/p016-ble-adversarial-qualification`.
 **Base main:** `1661bd39cb131da23d0b44c8c0ee301081c3f01a` (P015 PR #16 squash merge).
 **Provenance:** Original `OpenContinuity-Roadmap-P001-P060.md` was not available. P016 scope is provisional and does not claim to reproduce an unseen original milestone.
