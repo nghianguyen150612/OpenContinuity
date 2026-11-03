@@ -243,6 +243,7 @@ class QualificationTests(unittest.TestCase):
         self.assertNotIn('personal', json.dumps(result))
         self.assertNotIn('private-host', json.dumps(result))
         self.assertEqual(result['kernel_version'], '6.12.9')
+        self.assertEqual(result['cli_version'], 'unavailable')
 
 
 if __name__ == '__main__': unittest.main()

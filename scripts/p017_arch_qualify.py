@@ -104,7 +104,7 @@ def host(cli=None):
         'system_bus': raw['system_bus'],
         'bluez_access': raw.get('bluez_access', 'blocked_or_unavailable'),
         'bluez_version': raw['bluez_version'],
-        'cli_version': ('available' if raw['cli_version'] != 'unavailable' else 'unavailable'),
+        'cli_version': 'unavailable',
         'settings': raw['settings'],
         'adapter_count': len(raw['adapters']), 'adapters': raw['adapters'],
         'readiness': safe['bluez_readiness'],
