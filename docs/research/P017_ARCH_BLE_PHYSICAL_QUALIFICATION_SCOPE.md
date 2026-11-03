@@ -1,6 +1,8 @@
 # P017 — Arch BlueZ Physical Qualification & Foreground Watch Transport Trial (Provisional)
 
-**Status:** INITIALIZED — branch/scope only. No P017 implementation, Draft PR, or CI claim.
+**Status:** Software implementation and manual qualification kit prepared; see
+[P017 validation](../P017_VALIDATION.md) for executed checks and delivery links.
+Physical Arch/RF/Wayland/Watch stages remain NOT RUN/BLOCKED.
 **Branch:** `feat/p017-arch-ble-physical-qualification`
 **Base main:** `74dc662762317e688d216c702c6e0c9145c90f9a` (P016 PR #17 squash merge).
 **Roadmap caveat:** The canonical P001–P060 planning source remains unavailable. This P017 is explicitly **provisional**, not a reconstruction of the missing original milestone.

@@ -117,3 +117,19 @@ P016 adds adversarial production stream and Qt lifecycle tests plus a local,
 privacy-safe evidence validator. See [P016 validation](P016_VALIDATION.md). Software fixtures
 do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
 hardware gates remain NOT RUN and Watch remains NO-GO.
+
+## P017 operator-controlled qualification (provisional)
+
+`scripts/p017_arch_qualify.py` injects trusted, bounded probes into P015 and
+passes local JSONL through P016. It starts the production discovery CLI only
+with explicit consent/host ownership on a ready Arch host. The child retains
+all BlueZ Start/Stop/filter/connection ownership; the wrapper adds a private
+process group, output cap, monotonic deadline and bounded TERM/KILL fallback.
+P015 addresses the already-owned unique BlueZ name to avoid service activation.
+No alternative Bluetooth transport, Qt bridge or Watch protocol is added.
+
+The envelope records execution, validated terminal, cleanup claim and reaped exit
+independently. Operator declarations remain separate and cannot certify RF,
+physical cleanup, Wayland or Watch installation. See [evidence schema](research/P017_RF_AND_CLEANUP_EVIDENCE.md)
+and [validation](P017_VALIDATION.md). These physical gates are NOT RUN/BLOCKED;
+P010 Watch and native Apple Auto Unlock stay NO-GO. Authorization is never evaluated.

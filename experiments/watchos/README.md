@@ -42,3 +42,14 @@ Start Scan is disabled and rejected in the manager while any connection is owned
 ## P007B synthetic diagnostics and physical BLE validation
 
 The synthetic GATT screen offers bounded, metadata-only diagnostics: disabled by default, at most 64 events, erased on opt-out, never recording payloads, keys or device identifiers. Events include challenge/result lengths, frame acknowledgements and digest verdict. The trace shows `authorization: never_evaluated`. See [signed device installation](../../docs/research/P007B_APPLE_SIGNED_INSTALL.md), [physical BLE runbook](../../docs/research/P007B_REAL_BLE_RUNBOOK.md), and [validation](../../docs/P007B_VALIDATION.md). Real Watch SE 2 ↔ BlueZ trials remain NOT RUN.
+
+## P017 operator-controlled qualification (provisional)
+
+P017 adds a read-only-by-default host qualification runner with an explicitly
+consented bounded discovery mode, P016 evidence validation, bounded child
+termination and privacy-safe summaries. [Operator guide](../../docs/research/P017_WATCH_FOREGROUND_CENTRAL_TRIAL.md) and
+[validation](../../docs/P017_VALIDATION.md) separate software results from physical gates.
+Actual Arch RF/cleanup, native Wayland/Hyprland and signed Watch SE 2 trials are
+NOT RUN; P010 Watch acceptance and native Apple Auto Unlock remain NO-GO.
+Linux remains the experimental GATT peripheral and Watch the foreground central.
+No authorization is evaluated; no pairing/trust, policy or login changes occur.
