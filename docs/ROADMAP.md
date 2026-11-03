@@ -110,3 +110,14 @@ P016 adds adversarial production stream and Qt lifecycle tests plus a local,
 privacy-safe evidence validator. See [P016 validation](P016_VALIDATION.md). Software fixtures
 do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
 hardware gates remain NOT RUN and Watch remains NO-GO.
+
+## P017 operator-controlled qualification (provisional)
+
+P017 adds a read-only-by-default host qualification runner with an explicitly
+consented bounded discovery mode, P016 evidence validation, bounded child
+termination and privacy-safe summaries. [Operator guide](research/P017_SAFE_HOST_QUALIFICATION_TOOL.md) and
+[validation](P017_VALIDATION.md) separate software results from physical gates.
+Actual Arch RF/cleanup, native Wayland/Hyprland and signed Watch SE 2 trials are
+NOT RUN; P010 Watch acceptance and native Apple Auto Unlock remain NO-GO.
+Linux remains the experimental GATT peripheral and Watch the foreground central.
+No authorization is evaluated; no pairing/trust, policy or login changes occur.

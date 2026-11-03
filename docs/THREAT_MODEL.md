@@ -132,3 +132,23 @@ P016 adds adversarial production stream and Qt lifecycle tests plus a local,
 privacy-safe evidence validator. See [P016 validation](P016_VALIDATION.md). Software fixtures
 do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
 hardware gates remain NOT RUN and Watch remains NO-GO.
+
+## P017 operator-controlled qualification (provisional)
+
+The qualification runner trusts the local account/runtime and explicitly chosen
+installed CLI. Canonical executable/parent checks and fixed argv prevent shell
+injection; they do not authenticate code or eliminate same-account replacement
+races. Output/time limits and private transcript creation contain hostile child
+output without publishing device names, addresses, raw bus paths or errors.
+Manual operator evidence has strict fields but remains unauthenticated: even a
+schema-valid hardware pass cannot promote generated physical gates. BlueZ cleanup
+claims and process exit require independent physical review; shared Discovering
+state does not prove ownership. RF needs a separate receiver, Wayland a native
+compositor and Watch a signed installed foreground central app.
+
+See [P017 privacy/trust review](research/P017_PRIVACY_AND_TRUST_REVIEW.md) and
+[validation](P017_VALIDATION.md). Actual physical stages are NOT RUN/BLOCKED;
+Watch acceptance and native Apple Auto Unlock stay NO-GO. No automatic discovery,
+pairing/trust writes, production enrollment, identity/proximity inference,
+telemetry, Apple Account, PAM/polkit or Linux login authorization is introduced.
+`authorization: never_evaluated`.
