@@ -100,3 +100,7 @@ Unknown fields, duplicate fields (including escaped-equivalent keys), wrong
 sequence/session, invalid status, malformed UTF-8/JSON, truncation, or an absent
 terminal cause the Settings consumer to reject the stream and mark its rows
 stale. No arbitrary progress text is written to stdout.
+
+P015 supersedes the original one-record queue/deadline design above with a
+514-record queue and acknowledged-write progress deadline. See
+[P016 audit and test matrix](P016_ADVERSARIAL_STREAM_TEST_MATRIX.md).

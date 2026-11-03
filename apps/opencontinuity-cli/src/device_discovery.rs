@@ -903,17 +903,30 @@ mod linux {
             }
             Status::DataLimit
         }
-        async fn cleanup(&self) -> Cleanup {
-            if !self.ownership.filter_attempted {
+        async fn cleanup(self) -> Cleanup {
+            let Self {
+                connection,
+                owner,
+                path,
+                signals,
+                owners,
+                ownership,
+                _guard,
+            } = self;
+            // Collection has ended. Unread bounded signal subscriptions must not
+            // stall the connection reader while cleanup waits for method replies.
+            drop(signals);
+            drop(owners);
+            if !ownership.filter_attempted {
                 return Cleanup::NotNeeded;
             }
             let mut ok = true;
-            if self.ownership.started {
+            if ownership.started {
                 ok &= bounded(CALL_TIMEOUT, async {
-                    self.connection
+                    connection
                         .call_method(
-                            Some(self.owner.as_str()),
-                            self.path.as_str(),
+                            Some(owner.as_str()),
+                            path.as_str(),
                             Some(ADAPTER),
                             "StopDiscovery",
                             &(),
@@ -923,16 +936,16 @@ mod linux {
                 .await
                 .and_then(|reply| reply.body().deserialize::<()>().map_err(classify))
                 .is_ok();
-            } else if self.ownership.start_attempted {
+            } else if ownership.start_attempted {
                 // Start may have taken effect despite a lost reply; disconnect is the fallback.
                 // Never send StopDiscovery without a confirmed acquisition.
                 ok = false;
             }
             ok &= bounded(CALL_TIMEOUT, async {
-                self.connection
+                connection
                     .call_method(
-                        Some(self.owner.as_str()),
-                        self.path.as_str(),
+                        Some(owner.as_str()),
+                        path.as_str(),
                         Some(ADAPTER),
                         "SetDiscoveryFilter",
                         &(HashMap::<&str, Value<'_>>::new(),),
@@ -942,6 +955,14 @@ mod linux {
             .await
             .and_then(|reply| reply.body().deserialize::<()>().map_err(classify))
             .is_ok();
+            if bounded(Duration::from_secs(1), connection.close())
+                .await
+                .is_err()
+            {
+                ok = false;
+            }
+            // Keep the cooperative guard until calls and connection close finish.
+            drop(_guard);
             if ok {
                 Cleanup::Complete
             } else {
@@ -1101,14 +1122,6 @@ mod linux {
             Err(status) => status,
         };
         report.cleanup_status = session.cleanup().await;
-        // Explicitly close even if subscriptions still hold connection references.
-        if bounded(Duration::from_secs(1), session.connection.clone().close())
-            .await
-            .is_err()
-            && session.ownership.filter_attempted
-        {
-            report.cleanup_status = Cleanup::Incomplete;
-        }
         if report.cleanup_status == Cleanup::Incomplete && report.status == Status::Completed {
             report.status = Status::CleanupIncomplete;
         }

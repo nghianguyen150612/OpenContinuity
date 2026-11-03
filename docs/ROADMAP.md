@@ -105,3 +105,8 @@ or Watch SE 2 hardware. See the [protocol](research/P014_DISCOVERY_STREAM_PROTOC
 [validation](P014_VALIDATION.md). The original full roadmap remains unavailable.
 
 P015 streaming reliability and Arch qualification remain provisional; physical RF and Watch qualification require separate evidence. See [P015 validation](P015_VALIDATION.md).
+
+P016 adds adversarial production stream and Qt lifecycle tests plus a local,
+privacy-safe evidence validator. See [P016 validation](P016_VALIDATION.md). Software fixtures
+do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
+hardware gates remain NOT RUN and Watch remains NO-GO.

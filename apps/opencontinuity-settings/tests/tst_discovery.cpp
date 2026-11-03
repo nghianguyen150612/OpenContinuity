@@ -59,7 +59,7 @@ private slots:
     for (const auto &mode : {"invalid", "truncated", "invalid_utf8", "duplicate",
                              "escaped_duplicate", "wrong_schema", "wrong_session",
                              "bad_sequence", "bad_terminal", "exit_mismatch",
-                             "no_terminal", "duplicate_update"})
+                             "no_terminal", "duplicate_update", "partial_terminal", "crash"})
       QTest::newRow(mode) << QString(mode);
   }
   void parserRejectsMalformedStreams() {
@@ -113,6 +113,54 @@ private slots:
   void rejectsProcessOutput_data() { QTest::addColumn<QString>("mode"); for (const auto &m : {"oversized", "stderr"}) QTest::newRow(m) << QString(m); }
   void rejectsProcessOutput() {
     QFETCH(QString, mode); qputenv("OC_DISCOVERY_MODE", mode.toUtf8()); DeviceDiscoveryProvider p({fixtureExecutable}); p.scan(); QTRY_VERIFY_WITH_TIMEOUT(!p.scanning(), 5000); QCOMPARE(p.state(), "failed"); QCOMPARE(p.cleanupStatus(), "incomplete"); QVERIFY(!p.durationKnown());
+  }
+  void burstBeforeTerminalAndCancel() {
+    for (const auto &mode : {"burst", "burst_cancel"}) {
+      qputenv("OC_DISCOVERY_MODE", mode); DeviceDiscoveryProvider p({fixtureExecutable});
+      QSignalSpy updates(p.devices(), &DeviceDiscoveryModel::dataChanged);
+      p.scan();
+      QTRY_COMPARE_WITH_TIMEOUT(p.devices()->displayName("scan-0123456789abcdef-001"), "Burst 199", 5000);
+      QVERIFY(p.scanning()); QCOMPARE(p.devices()->count(), 1); QCOMPARE(updates.count(), 199);
+      if (QString(mode) == "burst_cancel") p.cancel();
+      QTRY_VERIFY_WITH_TIMEOUT(!p.scanning(), 5000);
+      QCOMPARE(p.state(), QString(mode) == "burst_cancel" ? "cancelled" : "completed");
+      QCOMPARE(p.cleanupStatus(), "complete");
+      QCOMPARE(p.devices()->stale(), QString(mode) == "burst_cancel");
+    }
+  }
+  void cancelBeforeStartedAndBlockedShutdown() {
+    qputenv("OC_DISCOVERY_MODE", "burst_hang");
+    DeviceDiscoveryProvider p({fixtureExecutable, 5000, 100});
+    p.scan(); p.cancel();
+    QTRY_VERIFY_WITH_TIMEOUT(!p.scanning(), 5000);
+    QCOMPARE(p.cleanupStatus(), "incomplete");
+    p.scan(); QTRY_COMPARE_WITH_TIMEOUT(p.devices()->count(), 1, 5000);
+    p.shutdown(); QVERIFY(!p.scanning()); QCOMPARE(p.cleanupStatus(), "incomplete"); QVERIFY(p.devices()->stale());
+    qputenv("OC_DISCOVERY_MODE", "burst"); p.scan();
+    QTRY_COMPARE_WITH_TIMEOUT(p.state(), "completed", 5000);
+    QTest::qWait(300); QCOMPARE(p.state(), "completed"); QVERIFY(!p.devices()->stale());
+  }
+  void retiredProcessSignalsCannotChangeNewSession() {
+    qputenv("OC_DISCOVERY_MODE", "burst_cancel"); DeviceDiscoveryProvider p({fixtureExecutable});
+    p.scan(); QTRY_COMPARE(p.devices()->count(), 1);
+    QPointer<QProcess> old = p.findChild<QProcess *>(); QVERIFY(old);
+    // shutdown completes synchronously, leaving the retired peer alive until
+    // deferred deletion. Deliver its signals while the next generation starts.
+    p.shutdown(); QVERIFY(!p.scanning());
+    qputenv("OC_DISCOVERY_MODE", "burst"); p.scan(); QVERIFY(p.scanning());
+    QVERIFY(old);
+    QVERIFY(QMetaObject::invokeMethod(old, "readyReadStandardOutput", Qt::DirectConnection));
+    QVERIFY(QMetaObject::invokeMethod(old, "finished", Qt::DirectConnection, Q_ARG(int, 9), Q_ARG(QProcess::ExitStatus, QProcess::CrashExit)));
+    QVERIFY(p.scanning()); QCOMPARE(p.cleanupStatus(), "pending");
+    QTRY_COMPARE_WITH_TIMEOUT(p.state(), "completed", 5000);
+    QCOMPARE(p.devices()->displayName("scan-0123456789abcdef-001"), "Burst 199");
+  }
+  void terminalEventCountMismatch() {
+    DeviceDiscoveryReport r; DeviceDiscoveryModel m;
+    QVERIFY(r.consumeLine(line(sessionEvent()), m));
+    QVERIFY(r.consumeLine(line(deviceEvent(2, "One", "observed")), m));
+    QVERIFY(!r.consumeLine(line(terminalEvent(3, 2)), m));
+    QVERIFY(!r.finish(0, true, m));
   }
   void missingExecutable() { DeviceDiscoveryProvider p({"relative-cli"}); p.scan(); QCOMPARE(p.state(), "cli_unavailable"); QVERIFY(!p.scanning()); }
   void timeoutAndForcedTerminationAreUncertain() {

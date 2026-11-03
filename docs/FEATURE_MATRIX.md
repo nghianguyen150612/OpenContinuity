@@ -59,3 +59,8 @@ P007–P010 research remains informational, hardware unverified and production
 unsupported. No Linux unlock or authorization is available.
 
 P015 adds a read-only Arch/BlueZ preflight; physical discovery, RF, GUI, and Watch stages are not qualified by it. See [qualification](research/P015_ARCH_BLUEZ_QUALIFICATION.md).
+
+P016 adds adversarial production stream and Qt lifecycle tests plus a local,
+privacy-safe evidence validator. See [P016 validation](P016_VALIDATION.md). Software fixtures
+do not qualify physical RF, native Wayland/Hyprland or Apple Watch SE 2; those
+hardware gates remain NOT RUN and Watch remains NO-GO.
