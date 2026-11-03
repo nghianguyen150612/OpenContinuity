@@ -324,7 +324,7 @@ def main(argv=None):
                     output.close()
         print(json.dumps(result, indent=2, sort_keys=True))
         return 1 if any(r['status'] == 'fail' for r in result['stages'].values()) else 0
-    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
         print('Qualification rejected: unsafe options, unavailable prerequisites, or invalid evidence.', file=sys.stderr)
         return 1
 

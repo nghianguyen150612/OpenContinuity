@@ -98,6 +98,16 @@ class QualificationTests(unittest.TestCase):
         self.directory.chmod(0o777)
         with self.assertRaises(ValueError): q.trusted_executable(valid)
         self.directory.chmod(0o700)
+        loop_directory = self.directory/'private-loop'
+        loop_directory.mkdir()
+        loop = loop_directory/'opencontinuity'
+        loop.symlink_to(loop)
+        code, _, error = self.invoke(['--cli', str(loop)])
+        self.assertEqual(code, 1)
+        self.assertNotIn('private-loop', error)
+        code, _, error = self.invoke(['--active-discovery', '--cli', str(loop), '--i-own-host', '--i-consent-to-radio-scan'])
+        self.assertEqual(code, 1)
+        self.assertNotIn('private-loop', error)
 
     def test_relative_path_entry_is_never_searched(self):
         self.executable('pass\n')
