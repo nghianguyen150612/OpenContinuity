@@ -47,6 +47,14 @@ final class GattDiagnosticsTests: XCTestCase {
         XCTAssertTrue(trace.samples.isEmpty)
         XCTAssertTrue(trace.aggregates.isEmpty)
     }
+    func testDeadlineIsAllowlistedAndClearedOnDisable() {
+        var trace = GattDiagnostics()
+        trace.setEnabled(true)
+        trace.record(.deadlineExpired)
+        XCTAssertEqual(trace.events, ["deadline_expired"])
+        trace.setEnabled(false)
+        XCTAssertTrue(trace.events.isEmpty)
+    }
     func testTraceBoundAndMetadataClamping() {
         var trace = GattDiagnostics()
         trace.setEnabled(true)

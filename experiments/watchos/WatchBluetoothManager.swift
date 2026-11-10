@@ -446,6 +446,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     func applicationDidSuspend() {
+        diagnostics.setEnabled(false)
         central.stopScan()
         scanGeneration = nil
         generationGate.advance()
@@ -793,6 +794,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled, let self, self.generation == token, self.operationToken == op else { return }
+            self.diagnostics.record(.deadlineExpired)
             action()
         }
     }
