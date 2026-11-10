@@ -7,8 +7,11 @@ public struct GattDiagnostics {
         case serviceDiscovered, characteristicsDiscovered, invalidated, disconnected
         case challengeLength(Int), responseLength(Int), frames(Int), acknowledged(Int)
         case digestVerified, versionVerified, controlAcknowledged, cancelled, deadlineExpired, failed
-        case staleCallbackRejected, verifiedRequestAccepted, requestValidationFailed
+        case staleCallbackRejected, verifiedRequestAccepted, requestValidationFailed, sessionTerminal
         case consentApproved, consentRejected, consentCancelled, consentFailed
+        case signedRequestFrameCount(Int), signedResponseFrameCount(Int)
+        case signedRequestFrameAcknowledged(Int), signedResponseFrameAcknowledged(Int)
+        case localAuthenticationSucceeded, localAuthenticationFailed, localAuthenticationUnsupported
         fileprivate var text: String {
             func bounded(_ n: Int) -> Int { min(max(n, 0), 65535) }
             switch self {
@@ -34,10 +37,18 @@ public struct GattDiagnostics {
             case .staleCallbackRejected: return "stale_callback_rejected"
             case .verifiedRequestAccepted: return "verified_request_accepted"
             case .requestValidationFailed: return "request_validation_failed"
+            case .sessionTerminal: return "session_terminal"
             case .consentApproved: return "consent_approved"
             case .consentRejected: return "consent_rejected"
             case .consentCancelled: return "consent_cancelled"
             case .consentFailed: return "consent_failed"
+            case .signedRequestFrameCount(let n): return "signed_request_frame_count=\(bounded(n))"
+            case .signedResponseFrameCount(let n): return "signed_response_frame_count=\(bounded(n))"
+            case .signedRequestFrameAcknowledged(let n): return "signed_request_frame_ack=\(bounded(n))"
+            case .signedResponseFrameAcknowledged(let n): return "signed_response_frame_ack=\(bounded(n))"
+            case .localAuthenticationSucceeded: return "local_authentication_succeeded"
+            case .localAuthenticationFailed: return "local_authentication_failed"
+            case .localAuthenticationUnsupported: return "local_authentication_unsupported"
             }
         }
     }
@@ -63,9 +74,24 @@ public struct GattDiagnostics {
         public var totalMs: UInt64 = 0
         public var maximumMs: UInt64 = 0
     }
+    public struct EventRecord: Codable {
+        public let sequence: UInt8
+        public let elapsedMs: UInt64
+        public let event: String
+    }
+    private struct ExportSample: Encodable {
+        let stage: Stage
+        let elapsedMs: UInt64
+        let outcome: Outcome
+        let expected: Int?
+        let actual: Int?
+    }
     public private(set) var aggregates: [String: Aggregate] = [:]
     public private(set) var samples: [Sample] = []
+    public private(set) var eventRecords: [EventRecord] = []
+    public private(set) var incomplete = false
     private var starts: [Stage: UInt64] = [:]
+    private var diagnosticStartedAtMilliseconds: UInt64 = 0
     public mutating func begin(_ stage: Stage, now: UInt64 = DispatchTime.now().uptimeNanoseconds / 1_000_000) {
         guard enabled else { return }
         starts[stage] = now
@@ -84,8 +110,13 @@ public struct GattDiagnostics {
             aggregate.totalMs += elapsed
             aggregate.maximumMs = max(aggregate.maximumMs, elapsed)
             aggregates[stage.rawValue] = aggregate
+        } else {
+            incomplete = true
         }
-        if samples.count == 64 { samples.removeFirst() }
+        if samples.count == 64 {
+            samples.removeFirst()
+            incomplete = true
+        }
         samples.append(Sample(stage: stage, timestampUnixMs: wall, elapsedMs: elapsed,
                               outcome: outcome, expected: expected.map { min(max($0, 0), 65535) },
                               actual: actual.map { min(max($0, 0), 65535) }))
@@ -94,21 +125,37 @@ public struct GattDiagnostics {
     public enum Source: String, Encodable { case physical, simulated, hostPreflight = "host_preflight" }
     public func exportJSON(source: Source = .simulated) -> String {
         struct Trace: Encodable {
-            let schemaVersion = 1
+            let schemaVersion = 2
             let kind = "diagnostic_trace"
             let authorization = "never_evaluated"
+            let trialId: String
             let source: Source
+            let incomplete: Bool
             let aggregates: [String: Aggregate]
-            let samples: [Sample]
+            let samples: [ExportSample]
+            let events: [EventRecord]
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(Trace(source: source, aggregates: aggregates, samples: samples)) else { return "" }
+        let terminalPresent = eventRecords.last?.event == Event.sessionTerminal.text
+        let scanStartPresent = eventRecords.contains { $0.event == Event.scanStarted.text }
+        let exportedSamples = samples.map {
+            ExportSample(stage: $0.stage, elapsedMs: $0.elapsedMs, outcome: $0.outcome,
+                         expected: $0.expected, actual: $0.actual)
+        }
+        guard let trialID,
+              let data = try? encoder.encode(Trace(trialId: trialID, source: source,
+                                                   incomplete: incomplete || !terminalPresent || !scanStartPresent,
+                                                   // A capture enabled mid-session cannot show the initial foreground scan boundary.
+                                                   aggregates: aggregates, samples: exportedSamples,
+                                                   events: eventRecords)),
+              data.count <= 16 * 1024 else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
     }
     public static let authorization = "authorization: never_evaluated"
     public private(set) var enabled = false
     public private(set) var events: [String] = []
+    public private(set) var trialID: String?
     public init() {}
     public mutating func setEnabled(_ enabled: Bool) {
         self.enabled = enabled
@@ -116,10 +163,30 @@ public struct GattDiagnostics {
         samples.removeAll()
         starts.removeAll()
         events.removeAll() // opting out discards the bounded in-memory trace
+        eventRecords.removeAll()
+        incomplete = false
+        trialID = enabled ? UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() : nil
+        diagnosticStartedAtMilliseconds = enabled ? DispatchTime.now().uptimeNanoseconds / 1_000_000 : 0
     }
     public mutating func record(_ event: Event) {
         guard enabled else { return }
-        if events.count == 64 { events.removeFirst() }
+        if case .sessionTerminal = event, eventRecords.last?.event == Event.sessionTerminal.text {
+            return
+        }
+        if events.count == 64 {
+            events.removeFirst()
+            incomplete = true
+        }
         events.append(event.text)
+        let now = DispatchTime.now().uptimeNanoseconds / 1_000_000
+        let elapsed = min(now >= diagnosticStartedAtMilliseconds ? now - diagnosticStartedAtMilliseconds : 0, 3_600_000)
+        if eventRecords.count == 64 {
+            eventRecords.removeFirst()
+            incomplete = true
+        }
+        eventRecords = eventRecords.enumerated().map { index, record in
+            EventRecord(sequence: UInt8(index), elapsedMs: record.elapsedMs, event: record.event)
+        }
+        eventRecords.append(EventRecord(sequence: UInt8(eventRecords.count), elapsedMs: elapsed, event: event.text))
     }
 }

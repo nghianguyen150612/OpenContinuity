@@ -133,3 +133,17 @@ independently. Operator declarations remain separate and cannot certify RF,
 physical cleanup, Wayland or Watch installation. See [evidence schema](research/P017_RF_AND_CLEANUP_EVIDENCE.md)
 and [validation](P017_VALIDATION.md). These physical gates are NOT RUN/BLOCKED;
 P010 Watch and native Apple Auto Unlock stay NO-GO. Authorization is never evaluated.
+
+## P018 trial diagnostics and evidence
+
+The existing P006/P009 GATT server accepts an explicit `--diagnostics` opt-in
+under `--experimental`. It records bounded fixed lifecycle events and aggregate
+write counts to stderr after owned cleanup; default report JSON and BLE wire
+formats do not change. BlueZ callbacks expose host method boundaries, not a
+remote peer ACK callback. The Watch extends the existing P007B local diagnostics
+export with a random local trial label and monotonic sequence. The operator may
+copy that label to Linux `--trial-id`; this bookkeeping does not authenticate a
+Watch or prove a radio exchange. The offline P018 checker validates the host and
+Watch exports independently and together without D-Bus, network or BLE access.
+Its output always leaves hardware unqualified. See the P018 schema, privacy
+review, and validation report. Physical W0–W6 remain NOT RUN/BLOCKED.

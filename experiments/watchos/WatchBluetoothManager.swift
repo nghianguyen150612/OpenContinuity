@@ -58,7 +58,12 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
     var diagnosticsEnabled: Bool { diagnostics.enabled }
     var diagnosticExport: String { diagnostics.enabled ? diagnostics.exportJSON(source: diagnosticSource) : "" }
-    var diagnosticLines: [String] { [GattDiagnostics.authorization] + diagnostics.events + (diagnostics.enabled ? [diagnosticExport] : []) }
+    var diagnosticLines: [String] {
+        [GattDiagnostics.authorization]
+            + (diagnostics.trialID.map { ["local trial label: \($0)"] } ?? [])
+            + diagnostics.events
+            + (diagnostics.enabled ? [diagnosticExport] : [])
+    }
     func setDiagnosticsEnabled(_ enabled: Bool) { diagnostics.setEnabled(enabled) }
 
     private var central: CBCentralManager!
@@ -363,6 +368,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         arm(seconds: WatchAuthTransport.bleClientScanTimeoutSeconds, token: token, message: "Scan timed out") { [weak self] in
             guard let self, self.scanGeneration == token else { return }
             self.diagnostics.record(.scanStopped)
+            self.diagnostics.record(.sessionTerminal)
             self.central.stopScan()
             self.scanGeneration = nil
             if self.authCredentials != nil { self.clearProtocolState() }
@@ -380,6 +386,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         central.stopScan()
         if authCredentials != nil { clearProtocolState() }
         state = .idle
+        diagnostics.record(.sessionTerminal)
     }
 
     func connect(_ item: ExperimentPeripheral) {
@@ -407,14 +414,18 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     func disconnect() {
-        diagnostics.record(.scanStopped)
+        if state == .scanning { diagnostics.record(.scanStopped) }
         central.stopScan()
         scanGeneration = nil
         guard !lifecycle.retiring else { return }
         generationGate.advance()
         clearProtocolState()
         lifecycle.terminate()
-        guard let peripheral else { state = .disconnected; return }
+        guard let peripheral else {
+            state = .disconnected
+            diagnostics.record(.sessionTerminal)
+            return
+        }
         // Retain until the terminal delegate event. No new scan may orphan it.
         state = .disconnecting
         diagnostics.begin(.cleanup)
@@ -428,7 +439,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             fail("Not ready or CoreBluetooth write limit is below 20 bytes"); return
         }
         do { frames = try GattWireCodec.frames(payload: testPayload, sessionID: id) }
-        catch { fail("Could not encode test frames: \(error.localizedDescription)"); return }
+        catch { fail("Could not encode the synthetic test frames."); return }
         diagnostics.record(.frames(frames.count))
         frameIndex = 0
         cancelRequested = false
@@ -472,9 +483,18 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
 
     private func consume(_ operation: GattLifecycle.Operation, peripheral: CBPeripheral, characteristic: CBCharacteristic? = nil) -> Bool {
         guard peripheral === self.peripheral, let ticket = lifecycle.pending,
-              ticket.operation == operation else { return false }
-        if let characteristic, characteristic !== pendingCharacteristic { return false }
-        guard lifecycle.complete(ticket, peripheral: peripheral.identifier) else { return false }
+              ticket.operation == operation else {
+            diagnostics.record(.staleCallbackRejected)
+            return false
+        }
+        if let characteristic, characteristic !== pendingCharacteristic {
+            diagnostics.record(.staleCallbackRejected)
+            return false
+        }
+        guard lifecycle.complete(ticket, peripheral: peripheral.identifier) else {
+            diagnostics.record(.staleCallbackRejected)
+            return false
+        }
         pendingCharacteristic = nil
         return true
     }
@@ -541,6 +561,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                 guard !owner.isEmpty else { throw WatchTransportError.ownerMismatch }
                 let count = (envelopeLength + 4) / 5
                 diagnostics.measure(.requestFrames, actual: count)
+                diagnostics.record(.signedRequestFrameCount(count))
                 diagnostics.begin(.requestDelivery)
                 authTransferID = transferID
                 authOwner = owner
@@ -583,7 +604,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             try writeAuthCommand(.acknowledge(UInt8(index)), characteristicUUID: WatchAuthTransport.requestControl, phase: .requestAck(index))
         } catch {
             diagnostics.record(.requestValidationFailed)
-            fail("P009 host request transport rejected a value: \(error.localizedDescription)")
+            fail("P009 host request transport rejected a value.")
         }
     }
 
@@ -700,6 +721,12 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         guard consentPresentation?.id == presentationID, state == .awaitingResearchConsent else { return }
         if outcome == .notRun { diagnostics.begin(.localAuthentication) }
         else { diagnostics.measure(.localAuthentication, outcome: outcome) }
+        switch outcome {
+        case .pass: diagnostics.record(.localAuthenticationSucceeded)
+        case .fail: diagnostics.record(.localAuthenticationFailed)
+        case .blocked: diagnostics.record(.localAuthenticationUnsupported)
+        case .notRun: break
+        }
     }
 
     func completeAuthenticatedConsent(
@@ -720,13 +747,20 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         consentPresentation = nil
         authConsentDeadline = nil
         switch result {
-        case .failure:
-            diagnostics.record(.consentCancelled)
+        case .failure(let failure):
+            switch failure {
+            case .cancelled:
+                diagnostics.record(.consentCancelled)
+            case .expired:
+                diagnostics.record(.deadlineExpired)
+            case .unsupported, .localAuthenticationDenied, .signingFailed:
+                diagnostics.record(.consentFailed)
+            }
             do {
                 try writeAuthCommand(.cancel, characteristicUUID: WatchAuthTransport.responseControl, phase: .cancel)
                 detail = "Research was cancelled or consent failed. No approval was signed; P009 transport is being cancelled."
             } catch {
-                fail("Could not cancel P009 transport: \(error.localizedDescription)")
+                fail("Could not cancel the P009 transport.")
             }
         case .success(let signed):
             diagnostics.record(signed.response.decision == .approved ? .consentApproved : .consentRejected)
@@ -750,6 +784,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                     signatureRaw: signed.signatureRaw
                 )
                 authResponseFrames = try WatchAuthTransportCodec.frames(envelope: envelope, transferID: transferID, mtu: 23)
+                diagnostics.record(.signedResponseFrameCount(authResponseFrames.count))
                 diagnostics.begin(.responseDelivery)
                 authResponseFrameIndex = 0
                 authResponseDeadline = WatchAuthMonotonicDeadline(
@@ -761,7 +796,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                 state = .sendingAuthResponse
                 try sendNextAuthResponseFrame()
             } catch {
-                fail("Could not frame signed P009 response: \(error.localizedDescription)")
+                fail("Could not frame the signed P009 response.")
             }
         }
     }
@@ -847,6 +882,8 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         detail = terminalDetail
         if let completedPeripheral {
             central.cancelPeripheralConnection(completedPeripheral)
+        } else {
+            diagnostics.record(.sessionTerminal)
         }
     }
 
@@ -870,7 +907,11 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         clearProtocolState()
         state = .failed(reason)
         detail = reason
-        if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        if let peripheral {
+            central.cancelPeripheralConnection(peripheral)
+        } else {
+            diagnostics.record(.sessionTerminal)
+        }
     }
 
     private func resetToIdle() { invalidateSession(keepPeripheral: false); state = .idle }
@@ -891,7 +932,8 @@ extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard central === self.central, lifecycle.canScan, state == .scanning, scanGeneration == generation, !peripherals.contains(where: { $0.id == peripheral.identifier }) else { return }
+        guard central === self.central else { diagnostics.record(.staleCallbackRejected); return }
+        guard lifecycle.canScan, state == .scanning, scanGeneration == generation, !peripherals.contains(where: { $0.id == peripheral.identifier }) else { return }
         let name = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? "Unnamed Linux peripheral"
         diagnostics.record(.discovered)
         diagnostics.measure(.discovery)
@@ -899,7 +941,8 @@ extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        guard central === self.central, state == .connecting, consume(.connect, peripheral: peripheral) else { return }
+        guard central === self.central else { diagnostics.record(.staleCallbackRejected); return }
+        guard state == .connecting, consume(.connect, peripheral: peripheral) else { return }
         watchdog?.cancel()
         state = .discovering
         diagnostics.record(.connected)
@@ -916,22 +959,35 @@ extension WatchBluetoothManager: @preconcurrency CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         guard central === self.central, peripheral === self.peripheral,
-              state == .connecting || lifecycle.retiring else { return }
+              state == .connecting || lifecycle.retiring else {
+            diagnostics.record(.staleCallbackRejected)
+            return
+        }
+        diagnostics.record(.failed)
+        diagnostics.measure(.failure, outcome: .fail)
         finishDisconnect(peripheral)
-        state = .failed("Connection failed: \(error?.localizedDescription ?? "unknown error")")
+        state = .failed("Connection failed.")
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        guard central === self.central else { return }
+        guard central === self.central else { diagnostics.record(.staleCallbackRejected); return }
+        if error != nil {
+            diagnostics.record(.failed)
+            diagnostics.measure(.failure, outcome: .fail)
+        }
         finishDisconnect(peripheral)
     }
 
     private func finishDisconnect(_ peripheral: CBPeripheral) {
-        guard peripheral === self.peripheral, lifecycle.disconnected(peripheral.identifier) else { return }
+        guard peripheral === self.peripheral, lifecycle.disconnected(peripheral.identifier) else {
+            diagnostics.record(.staleCallbackRejected)
+            return
+        }
         generationGate.advance()
         clearProtocolState()
         diagnostics.record(.disconnected)
         diagnostics.measure(.cleanup)
+        diagnostics.record(.sessionTerminal)
         peripheral.delegate = nil
         connectionDelegate = nil
         self.peripheral = nil
@@ -956,6 +1012,7 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                 fail("P009 authenticated research service missing or discovery failed")
                 return
             }
+            diagnostics.record(.serviceDiscovered)
             diagnostics.measure(.services)
             expectedService = service
             guard beginOperation(.characteristics) else { return }
@@ -999,6 +1056,7 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                 fail("Required P009 characteristic or properties missing")
                 return
             }
+            diagnostics.record(.characteristicsDiscovered)
             protocolVersion = "P009/1"
             readAuth(CBUUID(string: WatchAuthTransport.status))
             return
@@ -1049,14 +1107,14 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                 detail = cancelled ? "Synthetic transport test cancelled and verified." : "Synthetic transport exchange verified. Not authentication."
                 clearProtocolStatePreservingResult()
             } else { fail("Unexpected value update"); return }
-        } catch { fail("Invalid characteristic value: \(error.localizedDescription)") }
+        } catch { fail("The characteristic value failed protocol validation.") }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         guard consume(.write(characteristic.uuid.uuidString), peripheral: peripheral, characteristic: characteristic) else { return }
         watchdog?.cancel()
         diagnostics.measure(.writeAck, outcome: error == nil ? .pass : .fail)
-        guard error == nil else { fail("Write failed: \(error!.localizedDescription)"); return }
+        guard error == nil else { fail("The characteristic write failed."); return }
         if authCredentials != nil, let phase = authPhase {
             authPhase = nil
             do {
@@ -1069,6 +1127,7 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                         throw WatchTransportError.incompleteTransfer
                     }
                     try cursor.acknowledge(owner: owner, transferID: transferID, index: index, nowMilliseconds: currentMonotonicMilliseconds)
+                    diagnostics.record(.signedRequestFrameAcknowledged(Int(index)))
                     authReadCursor = cursor
                     if index + 1 < authFrameCount {
                         try requestAuthFrame(index + 1)
@@ -1081,6 +1140,7 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                     try finishAuthRequest()
                 case .responseFrame(let index):
                     guard index == authResponseFrameIndex else { throw WatchTransportError.duplicateOrOutOfOrder }
+                    diagnostics.record(.signedResponseFrameAcknowledged(index))
                     authResponseFrameIndex += 1
                     try sendNextAuthResponseFrame()
                 case .responseComplete:
@@ -1097,7 +1157,7 @@ extension WatchBluetoothManager: @preconcurrency CBPeripheralDelegate {
                     )
                 }
             } catch {
-                fail("P009 transport operation failed: \(error.localizedDescription)")
+                fail("The P009 transport operation failed.")
             }
             return
         }

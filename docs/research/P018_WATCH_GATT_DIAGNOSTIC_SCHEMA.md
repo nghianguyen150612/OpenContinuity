@@ -1,0 +1,17 @@
+# P018 GATT diagnostic schemas
+
+P018 keeps two local outputs separate. Host output is emitted as one JSON line to stderr only when `--diagnostics` is present under the existing `--experimental` command. Stdout and `--json` report schemas remain unchanged. Watch output is the P007B diagnostics export shown by the existing Share control. Both use `authorization: never_evaluated`.
+
+## Host v1
+
+Exact fields: `schemaVersion` (1), `kind` (`gatt_trial_diagnostics`), `source` (`host_runtime_observed`), `trialId` (32 lowercase hex characters), `authorization`, `incomplete` (boolean), `frameWriteCount`, `signedWriteCount`, `signedRequestFrameCount`, `signedResponseFrameCount`, `acknowledgementCount` (bounded integers), and `events` (up to 15 fixed records plus terminal, serialized to at most 2 KiB). An event contains only `sequence`, monotonic `elapsedMs`, `phase`, and `outcome`. Event phases are `start`, `adapter_ready`, `application_registration`, `advertisement_registration`, `session`, `frame`, `synthetic_exchange`, `signed_exchange`, `signed_request_read` (failed read only), `consent_decision`, `cancellation`, `expiration`, `disconnect`, `failure`, `cleanup_advertisement`, `cleanup_application`, and `terminal`. Outcomes are `attempted`, `confirmed`, `failed`, `observed`, `cancelled`, `expired`, `unknown`, `approved`, and `rejected`.
+
+Frame and signed write counts are aggregate method-call counts. P009 also counts request frame reads, response frame writes, and accepted request ACK controls. BlueZ method invocation provides no peer ACK callback for an ordinary write; the trace does not claim that the remote Watch acknowledged a host-side write unless a P009 ACK control was actually submitted and accepted. A successful GATT method callback is an observed local operation only.
+
+## Watch v2
+
+Exact export fields are `schemaVersion` (2), `kind` (`diagnostic_trace`), `trialId` (32 lowercase hex characters), `source` (`physical` or `simulated`), `incomplete`, `authorization`, `aggregates`, `samples`, and `events`. Events contain `sequence`, monotonic relative `elapsedMs`, and an allowlisted fixed event label, including only bounded numeric length/frame values where applicable. Exported samples contain only stage, relative elapsed time, outcome, and optional bounded expected/actual counts; internal P007B wall-clock sample timestamps are not exported. Aggregate totals may sum up to 65,535 bounded durations. There are at most 64 events and 64 samples; export is capped at 16 KiB. `incomplete` is true when the event/sample history was truncated, when capture began mid-session, or when the last observed session has no terminal event. Opting out clears the ID, events, samples, aggregates, and incomplete state. Background suspension clears capture.
+
+The trial label is generated locally by the Watch. To group a host record with it, copy the displayed label into `--trial-id` on the Linux command. Matching labels are operator-controlled bookkeeping; they do not establish a radio link, endpoint identity, or message authenticity. Do not put the label on air.
+
+The Watch records CoreBluetooth central callbacks actually delivered. It cannot observe independent RF, BlueZ registration, or Linux-side signature verification. The Watch stays a foreground central; Linux remains the GATT peripheral.

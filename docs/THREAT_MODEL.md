@@ -152,3 +152,16 @@ Watch acceptance and native Apple Auto Unlock stay NO-GO. No automatic discovery
 pairing/trust writes, production enrollment, identity/proximity inference,
 telemetry, Apple Account, PAM/polkit or Linux login authorization is introduced.
 `authorization: never_evaluated`.
+
+## P018 GATT trial diagnostics
+
+P018 diagnostic files are local, opt-in evidence with strict bounded metadata.
+The host excludes D-Bus paths, addresses, names, payloads, keys and signatures;
+the Watch excludes callback identifiers and response bytes. Local trial labels
+are random grouping values supplied by the operator and can be copied or
+fabricated. The offline validator checks schemas and order only; it does not
+attest inputs, synchronize device clocks, infer RF, qualify hardware or grant
+authorization. Diagnostic overflow or a missing session terminal marks host or
+Watch evidence incomplete. Imported
+Watch/runtime records remain untrusted. No telemetry, automatic scan, pairing,
+trust mutation or login integration is added. `authorization: never_evaluated`.

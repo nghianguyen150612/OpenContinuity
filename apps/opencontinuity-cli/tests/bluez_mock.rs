@@ -414,6 +414,29 @@ impl PrivateBluez {
         self.spawn_cli_for("hci0", duration)
     }
 
+    fn spawn_cli_with_diagnostics(&self, duration: u16, trial_id: &str) -> Child {
+        Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+            .args([
+                "research",
+                "watch-gatt",
+                "serve",
+                "--adapter",
+                "hci0",
+                "--duration-seconds",
+                &duration.to_string(),
+                "--experimental",
+                "--diagnostics",
+                "--trial-id",
+                trial_id,
+                "--json",
+            ])
+            .env("DBUS_SYSTEM_BUS_ADDRESS", &self.address)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
     fn spawn_cli_for(&self, adapter: &str, duration: u16) -> Child {
         Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
             .args([
@@ -776,6 +799,95 @@ fn missing_system_bus_bluez_service_and_adapter_have_distinct_failures() {
     let report: serde_json::Value = serde_json::from_slice(&no_bus.stdout).unwrap();
     assert_eq!(report["error_class"], "system_bus_unavailable");
     assert_eq!(report["authorization"], "never_evaluated");
+}
+
+#[test]
+fn p018_opt_in_trace_reports_owned_registration_cleanup_and_trial_label() {
+    let bluez = PrivateBluez::start(FailureMode::None);
+    let trial_id = "0123456789abcdef0123456789abcdef";
+    let start_at = bluez.events.lock().unwrap().len();
+    let mut child = bluez.spawn_cli_with_diagnostics(30, trial_id);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !bluez.events.lock().unwrap()[start_at..].contains(&"register_advertisement") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "server did not register advertisement"
+        );
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "server exited before advertisement registration"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["authorization"], "never_evaluated");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stderr.lines().count(), 1);
+    assert!(stderr.len() <= 2 * 1024);
+    assert!(!stderr.contains("/org/bluez/"));
+    let trace: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(trace["schemaVersion"], 1);
+    assert_eq!(trace["source"], "host_runtime_observed");
+    assert_eq!(trace["trialId"], trial_id);
+    assert_eq!(trace["authorization"], "never_evaluated");
+    let events = trace["events"].as_array().unwrap();
+    assert_eq!(events.first().unwrap()["phase"], "start");
+    assert_eq!(events.last().unwrap()["phase"], "terminal");
+    assert!(
+        events
+            .iter()
+            .any(|e| e["phase"] == "application_registration" && e["outcome"] == "confirmed")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e["phase"] == "advertisement_registration" && e["outcome"] == "confirmed")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e["phase"] == "cleanup_advertisement" && e["outcome"] == "confirmed")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e["phase"] == "cleanup_application" && e["outcome"] == "confirmed")
+    );
+}
+
+#[test]
+fn p018_diagnostics_preserve_registration_and_cleanup_failures() {
+    let bluez = PrivateBluez::start(FailureMode::AdvertisementAndRollbackFailure);
+    let output = bluez
+        .spawn_cli_with_diagnostics(1, "fedcba9876543210fedcba9876543210")
+        .wait_with_output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stderr.lines().count(), 1);
+    assert!(stderr.len() <= 2 * 1024);
+    let trace: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    let events = trace["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["phase"] == "advertisement_registration" && e["outcome"] == "failed")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e["phase"] == "cleanup_application" && e["outcome"] == "attempted")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e["phase"] == "cleanup_application" && e["outcome"] == "failed")
+    );
+    assert_eq!(events.last().unwrap()["phase"], "terminal");
+    assert_eq!(events.last().unwrap()["outcome"], "failed");
 }
 
 #[test]

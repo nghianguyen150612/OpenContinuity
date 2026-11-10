@@ -121,3 +121,16 @@ Actual Arch RF/cleanup, native Wayland/Hyprland and signed Watch SE 2 trials are
 NOT RUN; P010 Watch acceptance and native Apple Auto Unlock remain NO-GO.
 Linux remains the experimental GATT peripheral and Watch the foreground central.
 No authorization is evaluated; no pairing/trust, policy or login changes occur.
+
+## P018 foreground GATT trial instrumentation (provisional)
+
+P018 adds explicit bounded host diagnostics to the existing P006/P009 BlueZ
+servers, extends the P007B foreground Watch export with sequenced local events,
+and validates separately supplied runtime exports offline. The shared trial label
+only groups evidence and never authenticates an endpoint. See the [schema](research/P018_WATCH_GATT_DIAGNOSTIC_SCHEMA.md),
+[phase mapping](research/P018_HOST_AND_WATCH_PHASE_MAPPING.md), [privacy review](research/P018_OFFLINE_EVIDENCE_AND_PRIVACY.md),
+[physical runbook](research/P018_WATCH_SE2_PHYSICAL_TRIAL_RUNBOOK.md), [lifecycle security review](research/P018_GATT_LIFECYCLE_SECURITY_REVIEW.md),
+and [validation](P018_VALIDATION.md). Software tests and fake BlueZ checks do
+not qualify physical Arch RF, native Wayland or signed Watch SE 2 behavior. W0–W6
+remain NOT RUN/BLOCKED, P010 and native Auto Unlock remain NO-GO, and
+`authorization: never_evaluated`.

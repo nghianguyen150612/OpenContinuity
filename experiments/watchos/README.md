@@ -53,3 +53,16 @@ Actual Arch RF/cleanup, native Wayland/Hyprland and signed Watch SE 2 trials are
 NOT RUN; P010 Watch acceptance and native Apple Auto Unlock remain NO-GO.
 Linux remains the experimental GATT peripheral and Watch the foreground central.
 No authorization is evaluated; no pairing/trust, policy or login changes occur.
+
+## P018 foreground diagnostics and evidence
+
+The P007B diagnostic toggle now exports schema v2 with a local 32-hex trial
+label, bounded sequenced monotonic-relative event labels and timing aggregates.
+The export omits wall-clock sample timestamps and marks truncated, mid-session,
+or unterminated captures incomplete.
+Copy the displayed label into Linux `--trial-id` for operator grouping. The
+Watch stays the foreground CoreBluetooth central and clears capture on opt-out
+or background suspension. The export is not device attestation; see the
+[P018 schema](../../docs/research/P018_WATCH_GATT_DIAGNOSTIC_SCHEMA.md),
+[phase map](../../docs/research/P018_HOST_AND_WATCH_PHASE_MAPPING.md) and
+[physical runbook](../../docs/research/P018_WATCH_SE2_PHYSICAL_TRIAL_RUNBOOK.md).
