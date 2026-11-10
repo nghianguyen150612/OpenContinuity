@@ -65,3 +65,33 @@ Watch installation or CoreBluetooth exchange on physical hardware.
 Imported host, Watch, operator, observer and fixture records remain unverified;
 the offline validator never qualifies physical hardware. Every diagnostic and
 validator report preserves `authorization: never_evaluated`.
+
+## P018A diagnostic stderr liveness hardening
+
+P018A follows the P018 final implementation report and addresses a potential
+shutdown stall when a bounded diagnostic line is written to an undrained stderr
+pipe. The Linux server now attempts **one** best-effort nonblocking write of a
+single JSON-plus-newline record, through an independent open file description
+at `/proc/self/fd/2`. Unlike a `dup` plus `F_SETFL`, this does not mutate
+the original stderr's `O_NONBLOCK` flag. Regular-file redirection opens with
+`O_APPEND` so earlier content is not overwritten.
+
+The line is at most 2 KiB plus newline, less than Linux `PIPE_BUF`, hence
+writes to a nonblocking pipe are atomic: a full pipe drops the record instead
+of blocking or emitting a partial JSON line. A missing procfs fd, closed stderr,
+or failed write also silently discards diagnostics; missing metadata can never
+upgrade a trial to PASS. This liveness guard does not alter Bluetooth transport,
+radio ownership, GATT cleanup, CLI stdout or the Watch wire protocol.
+
+Two Linux Rust regressions cover successful complete-line pipe emission and
+already-full nonblocking pipe rejection, including unchanged original fd flags;
+an invalid descriptor is also rejected. These are software tests, not physical
+controller validation. Non-pipe destinations such as regular files may still
+experience filesystem I/O latency; this is not a guaranteed hard deadline for
+arbitrary filesystems.
+
+The prior P018 software evidence (191 Rust, 54 Python, Qt and Swift hosted
+jobs) was established before P018A. **P018A final-head CI must be verified
+separately on the exact eventual PR head**; prior workflow runs are historical.
+See the PR #19 Checks tab for the latest push and pull_request results:
+https://github.com/nghianguyen150612/OpenContinuity/pull/19/checks
