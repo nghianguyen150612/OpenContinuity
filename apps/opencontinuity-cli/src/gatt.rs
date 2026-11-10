@@ -2273,13 +2273,12 @@ mod linux {
         let trial_trace = diagnostics_enabled.then(|| Arc::new(TrialTrace::new()));
         if let Some(trace) = &trial_trace {
             trace.record(TrialPhase::Start, TrialOutcome::Attempted);
-            if let Ok(trial_id) = random_bytes::<16>() {
+            if let Some(trial_id) = trial_id.as_deref() {
+                let _ = trace.set_trial_id_hex(trial_id);
+            } else if let Ok(trial_id) = random_bytes::<16>() {
                 trace.set_trial_id(&trial_id);
             } else {
                 trace.set_trial_id(&[]);
-            }
-            if let Some(trial_id) = trial_id.as_deref() {
-                let _ = trace.set_trial_id_hex(trial_id);
             }
         }
         let mut diagnostics =

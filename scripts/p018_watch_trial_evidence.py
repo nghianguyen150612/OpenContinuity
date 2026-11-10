@@ -129,7 +129,10 @@ def validate_host_runtime(doc):
     fields(doc, {"schemaVersion", "kind", "source", "trialId", "authorization", "incomplete", "frameWriteCount", "signedWriteCount", "signedRequestFrameCount", "signedResponseFrameCount", "acknowledgementCount", "events"})
     if type(doc["schemaVersion"]) is not int or doc["schemaVersion"] != 1 or doc["kind"] != "gatt_trial_diagnostics" or doc["source"] != "host_runtime_observed" or doc["authorization"] != "never_evaluated":
         raise InvalidEvidence("invalid host record")
-    if not isinstance(doc["trialId"], str) or not ID.fullmatch(doc["trialId"]):
+    if doc["trialId"] is None:
+        if not doc["incomplete"]:
+            raise InvalidEvidence("missing host trial label")
+    elif not isinstance(doc["trialId"], str) or not ID.fullmatch(doc["trialId"]):
         raise InvalidEvidence("invalid host trial")
     if type(doc["incomplete"]) is not bool or any(not _strict_int(doc[key], 65535) for key in ("frameWriteCount", "signedWriteCount", "signedRequestFrameCount", "signedResponseFrameCount", "acknowledgementCount")):
         raise InvalidEvidence("invalid host metadata")
@@ -389,7 +392,7 @@ def validate_watch_runtime(doc):
 def validate_pair(host, watch):
     host = validate_host_runtime(host)
     watch = validate_watch_runtime(watch)
-    if host["trialId"] != watch["trialId"]:
+    if host["trialId"] is None or host["trialId"] != watch["trialId"]:
         raise InvalidEvidence("mismatched trial labels")
     watch_events = {e["event"].split(" ", 1)[0].split("=", 1)[0] for e in watch["events"]}
     host_p006 = any(e["phase"] == "synthetic_exchange" and e["outcome"] == "confirmed" for e in host["events"])

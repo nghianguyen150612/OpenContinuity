@@ -70,7 +70,6 @@ struct Report {
     schema_version: u8,
     kind: &'static str,
     source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     trial_id: Option<String>,
     authorization: &'static str,
     incomplete: bool,
@@ -345,5 +344,15 @@ mod tests {
             serde_json::from_slice(&trace.snapshot_json().unwrap()).unwrap();
         assert_eq!(value["trialId"], "0123456789abcdef0123456789abcdef");
         assert_eq!(value["authorization"], "never_evaluated");
+    }
+
+    #[test]
+    fn unavailable_trial_label_is_explicit_null_in_incomplete_schema() {
+        let trace = Trace::new();
+        trace.set_trial_id(&[]);
+        trace.record(Phase::Start, Outcome::Attempted);
+        let value: serde_json::Value =
+            serde_json::from_slice(&trace.snapshot_json().unwrap()).unwrap();
+        assert!(value["trialId"].is_null());
     }
 }

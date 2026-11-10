@@ -63,6 +63,17 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(p018.InvalidEvidence):
             p018.validate_pair(host, watch)
 
+    def test_incomplete_host_export_can_report_unavailable_local_label(self):
+        host = self.host_export("a" * 32)
+        host["trialId"] = None
+        host["incomplete"] = True
+        self.assertIsNone(p018.validate_host_runtime(host)["trialId"])
+        with self.assertRaises(p018.InvalidEvidence):
+            p018.validate_pair(host, self.watch_export("a" * 32))
+        host["incomplete"] = False
+        with self.assertRaises(p018.InvalidEvidence):
+            p018.validate_host_runtime(host)
+
     def test_pair_summary_marks_partial_and_differing_claims(self):
         trial = "a" * 32
         host, watch = self.host_export(trial), self.watch_export(trial)
