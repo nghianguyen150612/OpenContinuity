@@ -1,6 +1,6 @@
 # P018 GATT diagnostic schemas
 
-P018 keeps two local outputs separate. Host output is emitted as one JSON line to stderr only when `--diagnostics` is present under the existing `--experimental` command. Stdout and `--json` report schemas remain unchanged. Watch output is the P007B diagnostics export shown by the existing Share control. Both use `authorization: never_evaluated`.
+P018 keeps two local outputs separate. Host output is attempted as one JSON line to stderr only when `--diagnostics` is present under the existing `--experimental` command. On Linux, this is a single best-effort nonblocking write using a separately opened `/proc/self/fd/2` description: a full/closed stderr pipe or unavailable procfs may drop the report, and this must never count as success. Stdout and `--json` report schemas remain unchanged. Watch output is the P007B diagnostics export shown by the existing Share control. Both use `authorization: never_evaluated`.
 
 ## Host v1
 
