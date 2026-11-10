@@ -1,6 +1,5 @@
 //! Explicit opt-in, bounded metadata for local P006/P009 trial lifecycle review.
 use serde::Serialize;
-use std::io::Write;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
@@ -9,6 +8,38 @@ use std::time::Instant;
 
 const MAX_EVENTS: usize = 15; // keep room for a terminal record
 const MAX_JSON_BYTES: usize = 2 * 1024;
+
+/// Best-effort single write through a separate nonblocking file description.
+///
+/// Opening /proc/self/fd/N rather than dup() avoids changing O_NONBLOCK on the
+/// process-wide stderr open-file description. A single <=2 KiB line is below
+/// Linux PIPE_BUF, so a full pipe rejects it atomically instead of blocking or
+/// emitting half a JSON record. If procfs/reopening or writing fails, diagnostics
+/// are simply absent; Bluetooth cleanup and the CLI's exit must still proceed.
+#[cfg(target_os = "linux")]
+fn write_line_best_effort(fd: libc::c_int, line: &[u8]) -> bool {
+    if line.len() > MAX_JSON_BYTES + 1 {
+        return false;
+    }
+    let Ok(path) = std::ffi::CString::new(format!("/proc/self/fd/{fd}")) else {
+        return false;
+    };
+    // O_APPEND keeps a regular-file stderr redirection from being overwritten
+    // at offset zero when the procfs path gets a new file description.
+    let handle = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_APPEND,
+        )
+    };
+    if handle < 0 {
+        return false;
+    }
+    // One syscall: <= PIPE_BUF on Linux, atomic for pipes including a newline.
+    let written = unsafe { libc::write(handle, line.as_ptr().cast(), line.len()) };
+    let _ = unsafe { libc::close(handle) };
+    written == line.len() as isize
+}
 
 pub fn is_valid_trial_id(value: &str) -> bool {
     value.len() == 32
@@ -289,9 +320,11 @@ impl Drop for Trace {
                 }
             }
             if bytes.len() <= MAX_JSON_BYTES {
-                let mut stderr = std::io::stderr().lock();
-                let _ = stderr.write_all(&bytes);
-                let _ = stderr.write_all(b"\n");
+                bytes.push(b'\n');
+                #[cfg(target_os = "linux")]
+                let _ = write_line_best_effort(libc::STDERR_FILENO, &bytes);
+                // GATT runtime is Linux-only. Never introduce a blocking
+                // diagnostic fallback on unsupported targets.
             }
         }
     }
@@ -354,5 +387,66 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&trace.snapshot_json().unwrap()).unwrap();
         assert!(value["trialId"].is_null());
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn diagnostic_line_is_emitted_as_one_complete_record_to_a_pipe() {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+        let mut fds = [0; 2];
+        assert_eq!(
+            unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
+            0
+        );
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let line = b"{\"kind\":\"gatt_trial_diagnostics\"}\n";
+        assert!(write_line_best_effort(write_fd.as_raw_fd(), line));
+        let mut received = [0_u8; 128];
+        let count = unsafe {
+            libc::read(
+                read_fd.as_raw_fd(),
+                received.as_mut_ptr().cast(),
+                received.len(),
+            )
+        };
+        assert_eq!(count, line.len() as isize);
+        assert_eq!(&received[..count as usize], line);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn full_pipe_never_blocks_or_changes_the_original_fd_flags() {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::time::Duration;
+
+        let mut fds = [0; 2];
+        assert_eq!(
+            unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
+            0
+        );
+        let _read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let fill = [b'x'; 4096];
+        loop {
+            let written =
+                unsafe { libc::write(write_fd.as_raw_fd(), fill.as_ptr().cast(), fill.len()) };
+            if written < 0 {
+                assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EAGAIN));
+                break;
+            }
+            assert_eq!(written, fill.len() as isize);
+        }
+
+        let flags = unsafe { libc::fcntl(write_fd.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        let start = Instant::now();
+        assert!(!write_line_best_effort(
+            write_fd.as_raw_fd(),
+            b"{\"kind\":\"gatt_trial_diagnostics\"}\n"
+        ));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert_eq!(unsafe { libc::fcntl(write_fd.as_raw_fd(), libc::F_GETFL) }, flags);
+        assert!(!write_line_best_effort(-1, b"{}\n"));
     }
 }
