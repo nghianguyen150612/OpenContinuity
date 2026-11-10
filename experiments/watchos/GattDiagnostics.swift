@@ -7,6 +7,8 @@ public struct GattDiagnostics {
         case serviceDiscovered, characteristicsDiscovered, invalidated, disconnected
         case challengeLength(Int), responseLength(Int), frames(Int), acknowledged(Int)
         case digestVerified, versionVerified, controlAcknowledged, cancelled, deadlineExpired, failed
+        case staleCallbackRejected, verifiedRequestAccepted, requestValidationFailed
+        case consentApproved, consentRejected, consentCancelled, consentFailed
         fileprivate var text: String {
             func bounded(_ n: Int) -> Int { min(max(n, 0), 65535) }
             switch self {
@@ -29,6 +31,13 @@ public struct GattDiagnostics {
             case .cancelled: return "cancel_requested"
             case .deadlineExpired: return "deadline_expired"
             case .failed: return "operation_failed"
+            case .staleCallbackRejected: return "stale_callback_rejected"
+            case .verifiedRequestAccepted: return "verified_request_accepted"
+            case .requestValidationFailed: return "request_validation_failed"
+            case .consentApproved: return "consent_approved"
+            case .consentRejected: return "consent_rejected"
+            case .consentCancelled: return "consent_cancelled"
+            case .consentFailed: return "consent_failed"
             }
         }
     }

@@ -26,6 +26,7 @@ mod bluez;
 mod device_discovery;
 mod device_inventory;
 mod gatt;
+mod gatt_trial_diagnostics;
 mod qualification_diagnostics;
 mod radio_guard;
 
@@ -37,7 +38,7 @@ const HELP: &str = concat!(
     "       opencontinuity research watch-auth --fixture <path> [--json]\n",
     "       opencontinuity research watch-auth-transport prepare --fixture <path> --output <path>\n",
     "       opencontinuity research watch-auth-transport verify-response --fixture <path> --input <path> [--json]\n",
-    "       opencontinuity research watch-auth-gatt serve --adapter hci0 --duration-seconds 60 --enrollments <path> --host-key-file <path> --confirm-host-sha256 <64-lowercase-hex> --confirm-watch-sha256 <64-lowercase-hex> --experimental [--json]\n",
+    "       opencontinuity research watch-auth-gatt serve --adapter hci0 --duration-seconds 60 --enrollments <path> --host-key-file <path> --confirm-host-sha256 <64-lowercase-hex> --confirm-watch-sha256 <64-lowercase-hex> --experimental [--diagnostics] [--json]\n",
     "       opencontinuity research watch-auth-gatt generate-host-key --host-key-file <new-path> --experimental [--json]\n",
     "       opencontinuity research watch-auth-gatt export-host-pin --host-enrollment-id <id> --host-identity <id> --linux-uid <uid> --host-key-file <path> --experimental [--json]\n",
     "       opencontinuity research watch-auth-gatt check-enrollment --enrollments <path> --host-key-file <path> --experimental [--json]\n",
@@ -45,7 +46,7 @@ const HELP: &str = concat!(
     "       opencontinuity devices list --json\n",
     "       opencontinuity devices discover [--seconds 10] [--adapter-index 1] --json\n",
     "       opencontinuity devices discover [--seconds 10] [--adapter-index 1] --events-jsonl\n",
-    "       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--json]\n\n",
+    "       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--diagnostics] [--json]\n\n",
     "Commands:\n",
     "  doctor         Report this build's capability states without scanning devices\n",
     "  devices list   Read one snapshot of BlueZ known devices (never scans)\n",
@@ -187,6 +188,7 @@ fn run_watch_gatt_experiment(args: &[String]) -> ExitCode {
     let mut duration = None;
     let mut experimental = false;
     let mut json_output = false;
+    let mut diagnostics = false;
     let mut index = 2;
     while index < args.len() {
         match args[index].as_str() {
@@ -203,6 +205,10 @@ fn run_watch_gatt_experiment(args: &[String]) -> ExitCode {
             }
             "--experimental" if !experimental => {
                 experimental = true;
+                index += 1;
+            }
+            "--diagnostics" if !diagnostics => {
+                diagnostics = true;
                 index += 1;
             }
             "--json" if !json_output => {
@@ -233,7 +239,7 @@ fn run_watch_gatt_experiment(args: &[String]) -> ExitCode {
         eprintln!("could not install SIGINT/SIGTERM cleanup handler: {error}");
         return ExitCode::FAILURE;
     }
-    match gatt::serve(&adapter, duration, interrupted) {
+    match gatt::serve(&adapter, duration, interrupted, diagnostics) {
         Ok(report) => {
             if json_output {
                 println!(
@@ -544,6 +550,7 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
     let mut confirmed_watch_fingerprint = None;
     let mut experimental = false;
     let mut json_output = false;
+    let mut diagnostics = false;
     let mut index = 2;
     while index < args.len() {
         match args[index].as_str() {
@@ -580,6 +587,10 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
             }
             "--experimental" if !experimental => {
                 experimental = true;
+                index += 1;
+            }
+            "--diagnostics" if !diagnostics => {
+                diagnostics = true;
                 index += 1;
             }
             "--json" if !json_output => {
@@ -690,7 +701,7 @@ fn run_watch_auth_gatt(args: &[String]) -> ExitCode {
         eprintln!("could not install SIGINT cleanup handler: {error}");
         return ExitCode::FAILURE;
     }
-    match gatt::serve_auth(&adapter, duration, interrupted, config) {
+    match gatt::serve_auth(&adapter, duration, interrupted, config, diagnostics) {
         Ok(report) => {
             if json_output {
                 println!(

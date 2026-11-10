@@ -465,7 +465,9 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
     }
 
     fileprivate func acceptsDelegate(_ epoch: UInt64, peripheral: CBPeripheral) -> Bool {
-        peripheral === self.peripheral && lifecycle.generation == epoch && !lifecycle.retiring
+        let accepted = peripheral === self.peripheral && lifecycle.generation == epoch && !lifecycle.retiring
+        if !accepted { diagnostics.record(.staleCallbackRejected) }
+        return accepted
     }
 
     private func consume(_ operation: GattLifecycle.Operation, peripheral: CBPeripheral, characteristic: CBCharacteristic? = nil) -> Bool {
@@ -580,6 +582,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             authReadCursor = cursor
             try writeAuthCommand(.acknowledge(UInt8(index)), characteristicUUID: WatchAuthTransport.requestControl, phase: .requestAck(index))
         } catch {
+            diagnostics.record(.requestValidationFailed)
             fail("P009 host request transport rejected a value: \(error.localizedDescription)")
         }
     }
@@ -653,6 +656,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
             enrollment: credentials.watchEnrollment,
             signingKey: credentials.signingKey
         )
+        diagnostics.record(.verifiedRequestAccepted)
         guard verifiedAtWallMilliseconds < verified.request.expiresAtMilliseconds else {
             throw WatchAuthError.expired
         }
@@ -717,6 +721,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
         authConsentDeadline = nil
         switch result {
         case .failure:
+            diagnostics.record(.consentCancelled)
             do {
                 try writeAuthCommand(.cancel, characteristicUUID: WatchAuthTransport.responseControl, phase: .cancel)
                 detail = "Research was cancelled or consent failed. No approval was signed; P009 transport is being cancelled."
@@ -724,6 +729,7 @@ final class WatchBluetoothManager: NSObject, ObservableObject {
                 fail("Could not cancel P009 transport: \(error.localizedDescription)")
             }
         case .success(let signed):
+            diagnostics.record(signed.response.decision == .approved ? .consentApproved : .consentRejected)
             do {
                 guard let transferID = authTransferID else { throw WatchTransportError.sessionMismatch }
                 let now = currentMilliseconds

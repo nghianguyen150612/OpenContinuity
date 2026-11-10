@@ -81,6 +81,9 @@ pub fn validate_options(adapter: &str, duration: u16, experimental: bool) -> Res
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use crate::gatt_trial_diagnostics::{
+        Outcome as TrialOutcome, Phase as TrialPhase, Trace as TrialTrace,
+    };
     use crate::qualification_diagnostics::{Stage as DiagnosticStage, Trace as DiagnosticTrace};
     use futures_lite::{FutureExt, StreamExt};
     use opencontinuity_core::gatt_wire::{
@@ -1037,6 +1040,7 @@ mod linux {
     struct GattState {
         clients: Mutex<HashMap<String, ClientSession>>,
         auth_transport: Option<Arc<AuthTransportState>>,
+        trial_trace: Option<Arc<TrialTrace>>,
     }
 
     impl Default for GattState {
@@ -1044,15 +1048,28 @@ mod linux {
             Self {
                 clients: Mutex::new(HashMap::new()),
                 auth_transport: None,
+                trial_trace: None,
             }
         }
     }
 
     impl GattState {
-        fn with_auth_transport(auth_transport: Arc<AuthTransportState>) -> Self {
+        fn with_auth_transport(
+            auth_transport: Arc<AuthTransportState>,
+            trial_trace: Option<Arc<TrialTrace>>,
+        ) -> Self {
             Self {
                 clients: Mutex::new(HashMap::new()),
                 auth_transport: Some(auth_transport),
+                trial_trace,
+            }
+        }
+
+        fn with_trial_trace(trial_trace: Option<Arc<TrialTrace>>) -> Self {
+            Self {
+                clients: Mutex::new(HashMap::new()),
+                auth_transport: None,
+                trial_trace,
             }
         }
 
@@ -1100,6 +1117,9 @@ mod linux {
                         ))
                     })?,
                 );
+                if let Some(trace) = &self.trial_trace {
+                    trace.record(TrialPhase::Session, TrialOutcome::Confirmed);
+                }
             }
             let session = clients
                 .get_mut(device)
@@ -1146,6 +1166,9 @@ mod linux {
             frame: &[u8],
             mtu: usize,
         ) -> Result<(), BluezGattError> {
+            if let Some(trace) = &self.trial_trace {
+                trace.record(TrialPhase::Frame, TrialOutcome::Observed);
+            }
             let mut clients = self
                 .clients
                 .lock()
@@ -1195,12 +1218,24 @@ mod linux {
             value: &[u8],
             mtu: usize,
         ) -> Result<(), BluezGattError> {
-            self.auth_transport
+            let result = self
+                .auth_transport
                 .as_ref()
                 .ok_or_else(|| {
                     BluezGattError::NotPermitted("authenticated transport is unavailable".into())
                 })?
-                .write(device, kind, value, mtu)
+                .write(device, kind, value, mtu);
+            if let Some(trace) = &self.trial_trace {
+                trace.record(
+                    TrialPhase::SignedExchange,
+                    if result.is_ok() {
+                        TrialOutcome::Observed
+                    } else {
+                        TrialOutcome::Failed
+                    },
+                );
+            }
+            result
         }
 
         fn write_control(&self, device: &str, value: &[u8]) -> Result<(), BluezGattError> {
@@ -1241,10 +1276,16 @@ mod linux {
                         0,
                         payload.as_deref().expect("complete requires payload"),
                     ));
+                    if let Some(trace) = &self.trial_trace {
+                        trace.record(TrialPhase::SyntheticExchange, TrialOutcome::Confirmed);
+                    }
                     Ok(())
                 }
                 Ok(ControlCommand::Cancel) => {
                     session.respond(session.status_response(2, b"cancelled"));
+                    if let Some(trace) = &self.trial_trace {
+                        trace.record(TrialPhase::Cancellation, TrialOutcome::Cancelled);
+                    }
                     Ok(())
                 }
                 Err(error) => {
@@ -1901,6 +1942,7 @@ mod linux {
         app_registered: bool,
         ad_registered: bool,
         owner: String,
+        trial_trace: Option<Arc<TrialTrace>>,
     }
 
     impl Registration {
@@ -1916,6 +1958,9 @@ mod linux {
                 }
             }
             if self.ad_registered {
+                if let Some(trace) = &self.trial_trace {
+                    trace.record(TrialPhase::CleanupAdvertisement, TrialOutcome::Attempted);
+                }
                 match call_manager(
                     &self.connection,
                     &self.owner,
@@ -1924,14 +1969,30 @@ mod linux {
                     "UnregisterAdvertisement",
                     &self.ad_path,
                 ) {
-                    Ok(()) => self.ad_registered = false,
+                    Ok(()) => {
+                        self.ad_registered = false;
+                        if let Some(trace) = &self.trial_trace {
+                            trace.record(TrialPhase::CleanupAdvertisement, TrialOutcome::Confirmed);
+                        }
+                    }
                     Err(error) if registration_already_gone(&error) => {
                         self.ad_registered = false;
+                        if let Some(trace) = &self.trial_trace {
+                            trace.record(TrialPhase::CleanupAdvertisement, TrialOutcome::Confirmed);
+                        }
                     }
-                    Err(error) => errors.push(format!("advertisement unregister failed: {error}")),
+                    Err(error) => {
+                        if let Some(trace) = &self.trial_trace {
+                            trace.record(TrialPhase::CleanupAdvertisement, TrialOutcome::Failed);
+                        }
+                        errors.push(format!("advertisement unregister failed: {error}"));
+                    }
                 }
             }
             if self.app_registered {
+                if let Some(trace) = &self.trial_trace {
+                    trace.record(TrialPhase::CleanupApplication, TrialOutcome::Attempted);
+                }
                 let proxy = Proxy::new(
                     &self.connection,
                     self.owner.as_str(),
@@ -1944,11 +2005,22 @@ mod linux {
                     proxy.call("UnregisterApplication", &(app,))
                 });
                 match result {
-                    Ok(()) => self.app_registered = false,
+                    Ok(()) => {
+                        self.app_registered = false;
+                        if let Some(trace) = &self.trial_trace {
+                            trace.record(TrialPhase::CleanupApplication, TrialOutcome::Confirmed);
+                        }
+                    }
                     Err(error) if registration_already_gone(&error) => {
                         self.app_registered = false;
+                        if let Some(trace) = &self.trial_trace {
+                            trace.record(TrialPhase::CleanupApplication, TrialOutcome::Confirmed);
+                        }
                     }
                     Err(error) => {
+                        if let Some(trace) = &self.trial_trace {
+                            trace.record(TrialPhase::CleanupApplication, TrialOutcome::Failed);
+                        }
                         errors.push(format!("GATT application unregister failed: {error}"))
                     }
                 }
@@ -2065,8 +2137,9 @@ mod linux {
         adapter: &str,
         duration: u16,
         terminate: Arc<AtomicBool>,
+        diagnostics_enabled: bool,
     ) -> Result<ExperimentReport, ExperimentError> {
-        serve_inner(adapter, duration, terminate, None)
+        serve_inner(adapter, duration, terminate, None, diagnostics_enabled)
     }
 
     pub fn serve_auth(
@@ -2074,12 +2147,19 @@ mod linux {
         duration: u16,
         terminate: Arc<AtomicBool>,
         config: AuthTransportConfig,
+        diagnostics_enabled: bool,
     ) -> Result<AuthExperimentReport, ExperimentError> {
         let auth_transport =
             Arc::new(AuthTransportState::new(config).map_err(|error| {
                 err_report(adapter, duration, "signed_request_preflight", error)
             })?);
-        let transport = serve_inner(adapter, duration, terminate, Some(auth_transport.clone()))?;
+        let transport = serve_inner(
+            adapter,
+            duration,
+            terminate,
+            Some(auth_transport.clone()),
+            diagnostics_enabled,
+        )?;
         Ok(AuthExperimentReport {
             transport,
             research_decision: auth_transport.decision(),
@@ -2095,7 +2175,9 @@ mod linux {
         duration: u16,
         terminate: Arc<AtomicBool>,
         auth_transport: Option<Arc<AuthTransportState>>,
+        diagnostics_enabled: bool,
     ) -> Result<ExperimentReport, ExperimentError> {
+        let trial_trace = diagnostics_enabled.then(|| Arc::new(TrialTrace::new()));
         let mut diagnostics =
             DiagnosticTrace::new(std::env::var("OC_P010_DIAGNOSTICS").as_deref() == Ok("1"));
         let diagnostic_started = Instant::now();
@@ -2150,8 +2232,10 @@ mod linux {
         let ad_path = format!("/org/opencontinuity/advertisement_{token}");
         let service_path = format!("{app_path}/service0");
         let state = Arc::new(match auth_transport {
-            Some(auth_transport) => GattState::with_auth_transport(auth_transport),
-            None => GattState::default(),
+            Some(auth_transport) => {
+                GattState::with_auth_transport(auth_transport, trial_trace.clone())
+            }
+            None => GattState::with_trial_trace(trial_trace.clone()),
         });
         let monitor =
             SignalMonitor::start(&connection, &owner, &adapter_path, &app_path, state.clone())
@@ -2226,6 +2310,9 @@ mod linux {
                 "preflight",
                 "selected adapter is not reported powered; this experiment never powers it on",
             ));
+        }
+        if let Some(trace) = &trial_trace {
+            trace.record(TrialPhase::AdapterReady, TrialOutcome::Confirmed);
         }
         let supported_instances = manager_capability(&objects, &adapter_path, "SupportedInstances");
         let active_instances = manager_capability(&objects, &adapter_path, "ActiveInstances");
@@ -2389,6 +2476,7 @@ mod linux {
             app_registered: false,
             ad_registered: false,
             owner: owner.clone(),
+            trial_trace: trial_trace.clone(),
         };
         let app_object = OwnedObjectPath::try_from(app_path.as_str()).expect("validated path");
         let options: HashMap<String, OwnedValue> = HashMap::new();
@@ -2415,8 +2503,14 @@ mod linux {
         {
             return Err(error);
         }
+        if let Some(trace) = &trial_trace {
+            trace.record(TrialPhase::ApplicationRegistration, TrialOutcome::Attempted);
+        }
         if let Err(error) = manager.call::<_, _, ()>("RegisterApplication", &(app_object, options))
         {
+            if let Some(trace) = &trial_trace {
+                trace.record(TrialPhase::ApplicationRegistration, TrialOutcome::Failed);
+            }
             // A timed-out call may have registered despite its missing reply.
             if matches!(error, zbus::Error::InputOutput(_) | zbus::Error::Failure(_)) {
                 registration.app_registered = true;
@@ -2440,6 +2534,9 @@ mod linux {
             diagnostic_started,
             true,
         );
+        if let Some(trace) = &trial_trace {
+            trace.record(TrialPhase::ApplicationRegistration, TrialOutcome::Confirmed);
+        }
         registration.app_registered = true;
         if let Some(mut failure) =
             setup_deadline_error(adapter, duration, "registering_application", setup_deadline)
@@ -2463,6 +2560,12 @@ mod linux {
             return Err(failure);
         }
 
+        if let Some(trace) = &trial_trace {
+            trace.record(
+                TrialPhase::AdvertisementRegistration,
+                TrialOutcome::Attempted,
+            );
+        }
         if let Err(error) = call_manager(
             &connection,
             &owner,
@@ -2471,6 +2574,9 @@ mod linux {
             "RegisterAdvertisement",
             &ad_path,
         ) {
+            if let Some(trace) = &trial_trace {
+                trace.record(TrialPhase::AdvertisementRegistration, TrialOutcome::Failed);
+            }
             if matches!(error, zbus::Error::InputOutput(_) | zbus::Error::Failure(_)) {
                 registration.ad_registered = true;
             }
@@ -2495,6 +2601,12 @@ mod linux {
             diagnostic_started,
             true,
         );
+        if let Some(trace) = &trial_trace {
+            trace.record(
+                TrialPhase::AdvertisementRegistration,
+                TrialOutcome::Confirmed,
+            );
+        }
         registration.ad_registered = true;
         if let Some(mut failure) = setup_deadline_error(
             adapter,
@@ -2622,6 +2734,18 @@ mod linux {
             return Err(failure);
         }
         let shutdown_reason = active_result.expect("error handled");
+        if let Some(trace) = &trial_trace {
+            if shutdown_reason == "timeout" {
+                trace.record(TrialPhase::Expiration, TrialOutcome::Expired);
+            } else {
+                trace.record(TrialPhase::Disconnect, TrialOutcome::Observed);
+            }
+            trace.terminal(if cleanup_errors.is_empty() {
+                TrialOutcome::Confirmed
+            } else {
+                TrialOutcome::Failed
+            });
+        }
         if !cleanup_errors.is_empty() {
             let mut failure = err_report(adapter, duration, "stopping", "cleanup failed");
             failure.report.shutdown_reason = Some(shutdown_reason);
@@ -3642,6 +3766,31 @@ mod linux {
         }
 
         #[test]
+        fn opt_in_trace_observes_p006_production_session_frame_and_completion() {
+            let trace = Arc::new(TrialTrace::new());
+            let state = GattState::with_trial_trace(Some(trace.clone()));
+            let device = "/org/bluez/hci0/dev_private";
+            let id = challenge(&state, device);
+            finish(&state, device, id);
+
+            let report: serde_json::Value =
+                serde_json::from_slice(&trace.snapshot_json().unwrap()).unwrap();
+            assert_eq!(report["source"], "host_runtime_observed");
+            assert_eq!(report["authorization"], "never_evaluated");
+            assert_eq!(report["frameWriteCount"], 1);
+            let events = report["events"].as_array().unwrap();
+            assert!(events.iter().any(|event| event["phase"] == "session"));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["phase"] == "synthetic_exchange")
+            );
+            let json = String::from_utf8(trace.snapshot_json().unwrap()).unwrap();
+            assert!(!json.contains("dev_private"));
+            assert!(!json.contains("/org/bluez"));
+        }
+
+        #[test]
         fn result_stays_with_original_session_until_final_fragment_consumed() {
             let state = GattState::default();
             let device = "/org/bluez/hci0/dev_01";
@@ -3876,6 +4025,7 @@ pub fn serve(
     adapter: &str,
     duration: u16,
     _terminate: Arc<AtomicBool>,
+    _diagnostics_enabled: bool,
 ) -> Result<ExperimentReport, ExperimentError> {
     Err(ExperimentError {
         report: Box::new(ExperimentReport {
@@ -3905,6 +4055,7 @@ pub fn serve_auth(
     duration: u16,
     _terminate: Arc<AtomicBool>,
     _config: AuthTransportConfig,
+    _diagnostics_enabled: bool,
 ) -> Result<AuthExperimentReport, ExperimentError> {
     Err(ExperimentError {
         report: Box::new(ExperimentReport {

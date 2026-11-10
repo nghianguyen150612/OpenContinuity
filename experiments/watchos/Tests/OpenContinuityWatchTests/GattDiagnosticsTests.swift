@@ -55,6 +55,19 @@ final class GattDiagnosticsTests: XCTestCase {
         trace.setEnabled(false)
         XCTAssertTrue(trace.events.isEmpty)
     }
+    func testStaleRequestAndDecisionCategoriesContainNoIdentifiers() throws {
+        var trace = GattDiagnostics()
+        trace.setEnabled(true)
+        trace.record(.staleCallbackRejected)
+        trace.record(.verifiedRequestAccepted)
+        trace.record(.consentApproved)
+        let export = trace.exportJSON()
+        XCTAssertTrue(export.contains("stale_callback_rejected"))
+        XCTAssertTrue(export.contains("verified_request_accepted"))
+        XCTAssertTrue(export.contains("consent_approved"))
+        XCTAssertFalse(export.contains("identifier"))
+        XCTAssertEqual(GattDiagnostics.authorization, "authorization: never_evaluated")
+    }
     func testTraceBoundAndMetadataClamping() {
         var trace = GattDiagnostics()
         trace.setEnabled(true)
