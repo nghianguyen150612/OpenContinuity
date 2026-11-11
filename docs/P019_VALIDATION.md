@@ -1,9 +1,10 @@
 # P019 validation
 
 P019 is software work only. This report records the current branch's tested
-state separately from physical qualification. Update the local and hosted
-results below from the exact final commit before the Draft PR is considered
-ready for review.
+state separately from physical qualification. The local and hosted results
+below are tied to implementation commit
+`939d4978d0fa33b9dfc8e27f382be646fa92f501`; the validation-record commit is
+documentation-only.
 
 ## Implemented paths
 
@@ -40,20 +41,25 @@ executable trust checks.
 The first parallel Rust workspace run had two transient private BlueZ test-bus
 timeouts. Subsequent full workspace runs passed without test changes. The
 latest run, after adding executable trust-mode and nonblocking terminal
-descriptor coverage, passed all 225 tests.
-This is recorded rather than hidden; the final-head hosted workflow is still
-required to assess repeatability.
+descriptor coverage, passed all 225 tests. This is recorded rather than
+hidden.
 
 ## Hosted CI
 
-Populate this section only after the P019 Draft PR exists and both the branch
-push and PR workflows have completed on the exact final SHA. Hosted Qt/QML and
-Swift/watchOS results are separate from local validation and physical tests.
+Both final-head workflows completed successfully for implementation commit
+`939d4978d0fa33b9dfc8e27f382be646fa92f501`:
 
-- Final P019 SHA: pending
-- Push workflow: pending
-- Draft PR and workflow: pending
-- Rust / Qt / Swift job result: pending
+- [Branch push workflow](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/43000306906): Rust checks, Qt Settings, and Swift/watchOS all passed.
+- [Draft PR #20 workflow](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/43000318545): Rust checks, Qt Settings, and Swift/watchOS all passed.
+- Qt 6.4.2/Ninja ran all 5 CTest targets successfully, totaling 162 QtTest cases; the run includes the real QML window, navigation, and manual AirDrop refresh smoke test.
+- Swift XCTest suites passed. Rust-to-Swift-to-Rust signed transport and CryptoKit verification passed; unsigned watchOS compilation and development artifact packaging also passed.
+
+The first Qt run on `e172da6` found that clicking AirDrop's manual refresh
+changed focus before the next keyboard navigation assertion. The UI test now
+explicitly returns focus to the navigation control after refresh; the corrected
+QML smoke test passes in both workflows above. The final validation-record
+commit is documentation-only; its own push and PR checks are verified
+separately from these implementation-source results.
 
 ## Physical qualification
 

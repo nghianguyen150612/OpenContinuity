@@ -38,7 +38,7 @@ The backend vocabulary is `unsupported`, `unknown`, `available`, `blocked`,
 `ready`, `active`, and `failed`. Control plane, data plane, advertisement,
 radio and receiver availability are separate fields. The current CLI cannot
 return actual per-service advertisement readiness or transfer byte progress;
-those values remain `unknown`. `receiver_available` means that current local
+those values remain `unknown`. `receiverAvailable` means that current local
 preconditions were observed, not that an iPhone can discover the receiver.
 
 The report is schema version 1 and always says
