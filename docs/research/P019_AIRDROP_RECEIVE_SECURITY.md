@@ -35,6 +35,16 @@ and that directory is removed when the OpenContinuity process exits normally.
 Abrupt power loss can leave runtime files until the OS clears the runtime
 directory; unlinking is not secure erasure.
 
+Owly stdout/stderr are relayed only to a verified terminal, with a shared
+64 KiB cap. Each relay opens `/proc/self/fd/2` with `O_NONBLOCK` on a separate
+file description, so it does not change descriptor 2's status flags. If
+procfs is unavailable, the descriptor is no longer a TTY, or terminal output
+fails or exceeds the cap, the receive session stops and reports failure; the
+status JSON remains on stdout. The relay drains child pipes while stopping so
+they cannot strand the backend on a full pipe. This is best effort: terminal
+output may be dropped on failure, and the result is never treated as a
+successful transfer because output delivery failed.
+
 ## File handling
 
 The operator must select an existing destination. OpenContinuity resolves that

@@ -22,14 +22,15 @@ ready for review.
 
 Environment: Codex Cloud Linux workspace on Debian, Rust/Cargo 1.85.0,
 Python 3.12.14. The checkout is based on P018 merge
-`a3448cc428ff1e8afe7c393ea3be109eefdea5dc`. Results below were run against the
-P019 working tree before commit; rerun them against the exact final commit.
+`a3448cc428ff1e8afe7c393ea3be109eefdea5dc`. Results below were run against
+the final P019 source state, including the nonblocking terminal relay and
+executable trust checks.
 
 | Gate | Result |
 | --- | --- |
 | `cargo fmt --all -- --check` | PASS |
 | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace --all-targets` | PASS, 223 tests (83 CLI unit, 25 BlueZ D-Bus, 15 CLI command, 3 discovery CLI, 1 inventory CLI, 29 discovery D-Bus, 66 core, 1 daemon CLI) |
+| `cargo test --workspace --all-targets` | PASS, 225 tests (85 CLI unit, 25 BlueZ D-Bus, 15 CLI command, 3 discovery CLI, 1 inventory CLI, 29 discovery D-Bus, 66 core, 1 daemon CLI) |
 | `cargo build --workspace` | PASS |
 | `python3 -m unittest discover -s scripts/tests -v` | PASS, 55 tests |
 | `git diff --check` | PASS |
@@ -37,8 +38,9 @@ P019 working tree before commit; rerun them against the exact final commit.
 | Swift, CryptoKit, watchOS compile and packaging | Hosted macOS CI required |
 
 The first parallel Rust workspace run had two transient private BlueZ test-bus
-timeouts. An immediate full rerun passed all 222 tests without test changes;
-after adding executable trust-mode coverage, the full suite passed all 223.
+timeouts. Subsequent full workspace runs passed without test changes. The
+latest run, after adding executable trust-mode and nonblocking terminal
+descriptor coverage, passed all 225 tests.
 This is recorded rather than hidden; the final-head hosted workflow is still
 required to assess repeatability.
 

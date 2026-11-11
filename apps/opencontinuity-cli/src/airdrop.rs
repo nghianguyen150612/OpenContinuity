@@ -439,7 +439,10 @@ mod receive {
     use crate::airdrop::storage::{ReceiveLock, ReceiveSessionState, ReceiveStaging};
     use opencontinuity_core::airdrop::{BlockReason, ReceiveLifecycle, ReceiveState};
     use serde::Serialize;
+    use std::fs::{File, OpenOptions};
     use std::io;
+    use std::os::fd::{AsRawFd, RawFd};
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -884,15 +887,43 @@ mod receive {
         failed: Arc<AtomicBool>,
     ) -> std::thread::JoinHandle<io::Result<()>> {
         std::thread::spawn(move || {
+            let mut writer = match open_nonblocking_terminal(libc::STDERR_FILENO) {
+                Ok(writer) => writer,
+                Err(error) => {
+                    failed.store(true, Ordering::Relaxed);
+                    return Err(error);
+                }
+            };
             crate::airdrop::process::relay_bounded(
                 reader,
-                std::io::stderr(),
+                &mut writer,
                 &bytes,
                 &exceeded,
                 &failed,
                 MAX_RECEIVE_TERMINAL_OUTPUT,
             )
         })
+    }
+
+    fn open_nonblocking_terminal(fd: RawFd) -> io::Result<File> {
+        if unsafe { libc::isatty(fd) } != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "terminal output is unavailable",
+            ));
+        }
+        let path = format!("/proc/self/fd/{fd}");
+        let writer = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)?;
+        if unsafe { libc::isatty(writer.as_raw_fd()) } != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "terminal output is unavailable",
+            ));
+        }
+        Ok(writer)
     }
 
     fn install_child_limits(command: &mut Command) {
@@ -1118,6 +1149,54 @@ mod receive {
             assert_eq!(bytes.load(Ordering::Relaxed), 32);
             assert!(child.try_wait().unwrap().is_some());
             drop(stage);
+        }
+
+        #[test]
+        fn nonblocking_terminal_reopen_does_not_mutate_source_descriptor_flags() {
+            use std::ffi::CStr;
+
+            let master =
+                unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+            assert!(master >= 0, "could not open a test pseudo-terminal");
+            assert_eq!(unsafe { libc::grantpt(master) }, 0);
+            assert_eq!(unsafe { libc::unlockpt(master) }, 0);
+            let mut name = [0_i8; 256];
+            assert_eq!(
+                unsafe { libc::ptsname_r(master, name.as_mut_ptr(), name.len()) },
+                0
+            );
+            // SAFETY: `ptsname_r` wrote a NUL-terminated path to `name`.
+            let slave_name = unsafe { CStr::from_ptr(name.as_ptr()) };
+            let slave = unsafe {
+                libc::open(
+                    slave_name.as_ptr(),
+                    libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+                )
+            };
+            assert!(slave >= 0, "could not open the test pseudo-terminal slave");
+            let original_flags = unsafe { libc::fcntl(slave, libc::F_GETFL) };
+            assert!(original_flags >= 0);
+            let writer = open_nonblocking_terminal(slave).unwrap();
+            let reopened_flags = unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_GETFL) };
+            let original_after = unsafe { libc::fcntl(slave, libc::F_GETFL) };
+            assert!(reopened_flags & libc::O_NONBLOCK != 0);
+            assert_eq!(original_after, original_flags);
+            drop(writer);
+            unsafe {
+                libc::close(slave);
+                libc::close(master);
+            }
+        }
+
+        #[test]
+        fn nonblocking_terminal_reopen_rejects_non_terminal_descriptors() {
+            let file = std::fs::File::open("/dev/null").unwrap();
+            assert_eq!(
+                open_nonblocking_terminal(file.as_raw_fd())
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::NotConnected
+            );
         }
     }
 }
