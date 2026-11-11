@@ -5,6 +5,8 @@
 
 struct AirdropStatusReport {
   QString source = "unknown";
+  QString authorization = "never_evaluated";
+  QString physicalQualification = "not_qualified";
   QString backend = "unknown";
   QString controlPlane = "unknown";
   QString dataPlane = "unknown";

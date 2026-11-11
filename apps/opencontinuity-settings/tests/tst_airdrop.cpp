@@ -21,6 +21,8 @@ private slots:
     const auto report = AirdropStatusReport::parse(validStatus());
     QVERIFY(report);
     QCOMPARE(report->source, "owly_doctor");
+    QCOMPARE(report->authorization, "never_evaluated");
+    QCOMPARE(report->physicalQualification, "not_qualified");
     QCOMPARE(report->backend, "blocked");
     QCOMPARE(report->driver, "rtw89_8852be");
     QCOMPARE(report->pciId, "10ec:b852");

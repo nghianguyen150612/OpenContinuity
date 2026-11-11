@@ -211,6 +211,15 @@ ScrollView {
                 Layout.fillWidth: true
             }
             Label {
+                objectName: "airdropQualificationStatus"
+                visible: airdropStatus.state === "loaded"
+                text: "Authorization: " + airdropStatus.report.authorization +
+                      " · physical qualification: " + airdropStatus.report.physicalQualification
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            Label {
                 objectName: "airdropBlockReason"
                 visible: airdropStatus.state === "loaded"
                 text: "Current limitation: " + airdropStatus.report.blockReason

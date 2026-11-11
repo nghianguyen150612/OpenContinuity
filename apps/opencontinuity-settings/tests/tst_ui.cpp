@@ -127,8 +127,11 @@ private slots:
         auto *receive = window->findChild<QObject *>("airdropReceiveDisabled");
         QVERIFY(receive);
         QVERIFY(!receive->property("enabled").toBool());
-        refresh->forceActiveFocus();
-        QTest::keyClick(window, Qt::Key_Return);
+        QTest::mouseClick(
+            window, Qt::LeftButton, Qt::NoModifier,
+            refresh->mapToScene(QPointF(refresh->width() / 2,
+                                       refresh->height() / 2))
+                .toPoint());
         QTRY_COMPARE(airdropStatus.state(),
                      unavailable ? "cli_unavailable" : "loaded");
       }

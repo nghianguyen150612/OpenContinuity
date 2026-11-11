@@ -102,6 +102,8 @@ std::optional<AirdropStatusReport> AirdropStatusReport::parse(
 
   AirdropStatusReport result;
   result.source = root.value("source").toString();
+  result.authorization = root.value("authorization").toString();
+  result.physicalQualification = root.value("physicalQualification").toString();
   result.backend = root.value("backend").toString();
   result.controlPlane = root.value("controlPlane").toString();
   result.dataPlane = root.value("dataPlane").toString();
@@ -153,6 +155,8 @@ std::optional<AirdropStatusReport> AirdropStatusReport::parse(
 
 QVariantMap AirdropStatusReport::asMap() const {
   return {{"source", source},
+          {"authorization", authorization},
+          {"physicalQualification", physicalQualification},
           {"backend", backend},
           {"controlPlane", controlPlane},
           {"dataPlane", dataPlane},
