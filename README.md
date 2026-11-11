@@ -142,3 +142,20 @@ Actual Arch RF/cleanup, native Wayland/Hyprland and signed Watch SE 2 trials are
 NOT RUN; P010 Watch acceptance and native Apple Auto Unlock remain NO-GO.
 Linux remains the experimental GATT peripheral and Watch the foreground central.
 No authorization is evaluated; no pairing/trust, policy or login changes occur.
+
+## P018 foreground GATT trial diagnostics (provisional)
+
+The existing P006 `watch-gatt serve` and P009 `watch-auth-gatt serve` accept
+`--diagnostics` only under `--experimental`. This emits bounded host lifecycle
+metadata to stderr without changing stdout JSON. The foreground Watch reuses the
+P007B opt-in diagnostics screen, uses a local trial label and clears capture on
+opt-out/background. Pass the label displayed on Watch to Linux with
+`--trial-id <32-lowercase-hex>` to let the offline checker group the files.
+Matching labels are operator-controlled and do not prove that the devices
+communicated. See the [diagnostic schema](docs/research/P018_WATCH_GATT_DIAGNOSTIC_SCHEMA.md),
+[phase map](docs/research/P018_HOST_AND_WATCH_PHASE_MAPPING.md),
+[privacy review](docs/research/P018_OFFLINE_EVIDENCE_AND_PRIVACY.md),
+[lifecycle security review](docs/research/P018_GATT_LIFECYCLE_SECURITY_REVIEW.md),
+[runbook](docs/research/P018_WATCH_SE2_PHYSICAL_TRIAL_RUNBOOK.md) and
+[validation](docs/P018_VALIDATION.md). W0–W6 real hardware trials remain NOT RUN;
+P010 remains NO-GO and `authorization: never_evaluated`.

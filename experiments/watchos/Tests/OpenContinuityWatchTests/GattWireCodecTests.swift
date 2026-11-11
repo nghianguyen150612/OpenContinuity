@@ -76,6 +76,21 @@ final class GattWireCodecTests: XCTestCase {
         XCTAssertTrue(gate.accepts(current))
     }
 
+    func testLifecycleRejectsStaleOperationAfterSamePeripheralReconnect() {
+        var lifecycle = GattLifecycle()
+        let id = UUID()
+        XCTAssertTrue(lifecycle.connect(id))
+        let oldTicket = lifecycle.begin(.connect)!
+        lifecycle.terminate()
+        XCTAssertTrue(lifecycle.disconnected(id))
+        XCTAssertTrue(lifecycle.connect(id))
+        let currentTicket = lifecycle.begin(.connect)!
+
+        XCTAssertNotEqual(oldTicket.generation, currentTicket.generation)
+        XCTAssertFalse(lifecycle.complete(oldTicket, peripheral: id))
+        XCTAssertTrue(lifecycle.complete(currentTicket, peripheral: id))
+    }
+
     func testFragmentBoundariesAndMalformedFrames() throws {
         let id = Array(data(fixture.session_id))
         XCTAssertThrowsError(try GattWireCodec.frames(payload: Data(), sessionID: id))

@@ -20,6 +20,63 @@ fn help_and_version_work() {
 }
 
 #[test]
+fn gatt_diagnostics_flags_keep_the_experimental_guard_and_strict_trial_label() {
+    let command = [
+        "research",
+        "watch-gatt",
+        "serve",
+        "--adapter",
+        "hci0",
+        "--duration-seconds",
+        "10",
+        "--diagnostics",
+    ];
+    let output = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args(command)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--experimental"));
+
+    let without_diagnostics = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args([
+            "research",
+            "watch-gatt",
+            "serve",
+            "--adapter",
+            "hci0",
+            "--duration-seconds",
+            "10",
+            "--experimental",
+            "--trial-id",
+            "not-a-label",
+        ])
+        .output()
+        .unwrap();
+    assert!(!without_diagnostics.status.success());
+    assert!(without_diagnostics.stdout.is_empty());
+
+    let uppercase = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args([
+            "research",
+            "watch-gatt",
+            "serve",
+            "--adapter",
+            "hci0",
+            "--duration-seconds",
+            "10",
+            "--experimental",
+            "--diagnostics",
+            "--trial-id",
+            "0123456789ABCDEF0123456789ABCDEF",
+        ])
+        .output()
+        .unwrap();
+    assert!(!uppercase.status.success());
+    assert!(uppercase.stdout.is_empty());
+}
+
+#[test]
 fn watch_auth_command_requires_an_explicit_signed_response_fixture() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -322,4 +379,22 @@ fn watch_gatt_command_requires_explicit_opt_in_and_rejects_unbounded_duration() 
         .unwrap();
     assert!(!unbounded.status.success());
     assert!(String::from_utf8_lossy(&unbounded.stderr).contains("between 1 and 300"));
+
+    let unopted_trial_id = Command::new(binary)
+        .args([
+            "research",
+            "watch-gatt",
+            "serve",
+            "--adapter",
+            "hci0",
+            "--duration-seconds",
+            "1",
+            "--experimental",
+            "--trial-id",
+            "0123456789abcdef0123456789abcdef",
+        ])
+        .output()
+        .unwrap();
+    assert!(!unopted_trial_id.status.success());
+    assert!(!String::from_utf8_lossy(&unopted_trial_id.stderr).contains("D-Bus unavailable"));
 }
