@@ -134,6 +134,7 @@ private slots:
                 .toPoint());
         QTRY_COMPARE(airdropStatus.state(),
                      unavailable ? "cli_unavailable" : "loaded");
+        nav->forceActiveFocus();
       }
       if (!unavailable && (i == 2 || i == 4)) {
         const auto cap = backend.capability(i == 2 ? "apple_watch_auto_unlock" : "airpods_settings");
