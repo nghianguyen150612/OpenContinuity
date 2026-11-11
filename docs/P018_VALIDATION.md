@@ -128,8 +128,22 @@ cleanup, but does not promise a hard process-return deadline for arbitrary
 regular-file, terminal, device, procfs, or close I/O. Diagnostic delivery is
 best-effort; missing output cannot establish a successful trial.
 
-Hosted Qt and Swift/watchOS results from the preceding P018 head do not qualify
-this P018A change. The exact P018A final-head push and pull-request workflow
-links and conclusions will be recorded here after both events complete.
-Check the PR #19 workflow history:
+The P018A implementation commit `12687782ff792d9c3ad82855d60b7189b8243c6c`
+passed both exact-head workflows, with all six jobs green:
+
+- [Push workflow](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/42974810811): Rust, Qt Settings (Linux), and Swift tests/watchOS compile passed.
+- [Pull request workflow](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/42974816427): Rust, Qt Settings (Linux), and Swift tests/watchOS compile passed.
+
+Hosted Qt 6.4.2 validation passed CMake/Ninja build and install plus **4/4 CTest
+targets**. The QtTest executables reported 62, 27, 42 and 12 assertions (**143
+total**); the 12-case QML smoke test loaded the real UI and exercised
+navigation. Hosted Swift ran **36 XCTest cases with one suite-gated
+interoperability case skipped** in the base suite; the selected case passed in
+the dedicated Rust → Swift → Rust round-trip step. CryptoKit verification,
+unsigned watchOS SDK compilation, unsigned development packaging and artifact
+upload also passed.
+
+This report update records the verified implementation commit above. The
+current PR #19 Checks page shows the latest status when this document is
+updated with validation metadata:
 https://github.com/nghianguyen150612/OpenContinuity/pull/19/checks
