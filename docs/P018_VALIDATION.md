@@ -143,7 +143,10 @@ the dedicated Rust → Swift → Rust round-trip step. CryptoKit verification,
 unsigned watchOS SDK compilation, unsigned development packaging and artifact
 upload also passed.
 
-This report update records the verified implementation commit above. The
-current PR #19 Checks page shows the latest status when this document is
-updated with validation metadata:
+The follow-up report-only head `46e51e9c0b40b688069e21ea35c38499d8dd5d25`
+also passed both final-head workflows: [push](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/42976441081)
+and [pull request](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/42976447096),
+with Rust, Qt Settings, and Swift/watchOS green in each. The final validation
+record is documentation-only; the current PR #19 Checks page shows its latest
+head status:
 https://github.com/nghianguyen150612/OpenContinuity/pull/19/checks
