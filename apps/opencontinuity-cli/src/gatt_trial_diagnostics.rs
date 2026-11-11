@@ -18,10 +18,15 @@ const MAX_JSON_BYTES: usize = 2 * 1024;
 /// are simply absent; Bluetooth cleanup and the CLI's exit must still proceed.
 #[cfg(target_os = "linux")]
 fn write_line_best_effort(fd: libc::c_int, line: &[u8]) -> bool {
+    write_line_best_effort_from("/proc/self/fd", fd, line)
+}
+
+#[cfg(target_os = "linux")]
+fn write_line_best_effort_from(proc_fd_dir: &str, fd: libc::c_int, line: &[u8]) -> bool {
     if line.len() > MAX_JSON_BYTES + 1 {
         return false;
     }
-    let Ok(path) = std::ffi::CString::new(format!("/proc/self/fd/{fd}")) else {
+    let Ok(path) = std::ffi::CString::new(format!("{proc_fd_dir}/{fd}")) else {
         return false;
     };
     // O_APPEND keeps a regular-file stderr redirection from being overwritten
@@ -36,9 +41,76 @@ fn write_line_best_effort(fd: libc::c_int, line: &[u8]) -> bool {
         return false;
     }
     // One syscall: <= PIPE_BUF on Linux, atomic for pipes including a newline.
-    let written = unsafe { libc::write(handle, line.as_ptr().cast(), line.len()) };
+    let written = write_while_blocking_sigpipe(handle, line);
     let _ = unsafe { libc::close(handle) };
     written == line.len() as isize
+}
+
+/// Prevent a broken stderr pipe from delivering the default terminating
+/// SIGPIPE to this process. The signal mask is thread-local and restored before
+/// returning; no process-wide signal disposition is changed.
+#[cfg(target_os = "linux")]
+fn write_while_blocking_sigpipe(fd: libc::c_int, line: &[u8]) -> libc::ssize_t {
+    let mut sigpipe_set = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    if unsafe { libc::sigemptyset(&mut sigpipe_set) } != 0
+        || unsafe { libc::sigaddset(&mut sigpipe_set, libc::SIGPIPE) } != 0
+    {
+        return -1;
+    }
+
+    let mut previous_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    if unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &sigpipe_set, &mut previous_mask) } != 0 {
+        return -1;
+    }
+
+    let mut pending_before = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let pending_status = unsafe { libc::sigpending(&mut pending_before) };
+    let was_pending = if pending_status == 0 {
+        unsafe { libc::sigismember(&pending_before, libc::SIGPIPE) }
+    } else {
+        -1
+    };
+    if pending_status != 0 || was_pending < 0 {
+        let _ = unsafe {
+            libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut())
+        };
+        return -1;
+    }
+
+    let written = unsafe { libc::write(fd, line.as_ptr().cast(), line.len()) };
+    let broken_pipe =
+        written < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPIPE);
+    if broken_pipe && was_pending == 0 {
+        // Linux queues the synchronous SIGPIPE for this writing thread. Consume
+        // only a newly generated signal before restoring its prior mask.
+        let mut pending_after = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+        if unsafe { libc::sigpending(&mut pending_after) } == 0
+            && unsafe { libc::sigismember(&pending_after, libc::SIGPIPE) } == 1
+        {
+            loop {
+                let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+                let timeout = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                };
+                let received = unsafe { libc::sigtimedwait(&sigpipe_set, &mut info, &timeout) };
+                if received == libc::SIGPIPE {
+                    break;
+                }
+                if received < 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+                {
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+
+    let restored =
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut()) }
+            == 0;
+    if restored { written } else { -1 }
 }
 
 pub fn is_valid_trial_id(value: &str) -> bool {
@@ -334,6 +406,94 @@ impl Drop for Trace {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    const STDERR_CHILD_MODE: &str = "OC_P018_STDERR_CHILD_MODE";
+    #[cfg(target_os = "linux")]
+    const STDERR_TEST_LINE: &[u8] = b"{\"kind\":\"gatt_trial_diagnostics\"}\n";
+
+    #[cfg(target_os = "linux")]
+    fn pipe(flags: libc::c_int) -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
+        use std::os::fd::FromRawFd;
+
+        let mut fds = [-1; 2];
+        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), flags) }, 0);
+        unsafe {
+            (
+                std::os::fd::OwnedFd::from_raw_fd(fds[0]),
+                std::os::fd::OwnedFd::from_raw_fd(fds[1]),
+            )
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn spawn_stderr_child(mode: &str, stderr: std::process::Stdio) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "gatt_trial_diagnostics::tests::stderr_subprocess_child",
+                "--nocapture",
+            ])
+            .env(STDERR_CHILD_MODE, mode)
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_bounded(child: &mut std::process::Child) -> std::process::ExitStatus {
+        use std::time::Duration;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("stderr child stalled");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Re-executed by the subprocess tests. `process::exit` avoids test-harness
+    /// writes to intentionally closed or full stderr pipes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stderr_subprocess_child() {
+        let Ok(mode) = std::env::var(STDERR_CHILD_MODE) else {
+            return;
+        };
+        // Rust normally ignores SIGPIPE. Restore its default only in this
+        // isolated child so the regression proves the writer handles EPIPE.
+        assert_ne!(
+            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) },
+            libc::SIG_ERR
+        );
+        let before = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) };
+        let child_ok = match mode.as_str() {
+            "normal" | "closed" | "full" => {
+                let trace = Trace::new();
+                assert!(trace.set_trial_id_hex("0123456789abcdef0123456789abcdef"));
+                trace.record(Phase::Start, Outcome::Attempted);
+                trace.terminal(Outcome::Confirmed);
+                drop(trace);
+                true
+            }
+            "missing_procfs" => !write_line_best_effort_from(
+                "/proc/self/oc_p018_missing_fd_dir/fd",
+                libc::STDERR_FILENO,
+                STDERR_TEST_LINE,
+            ),
+            "invalid_fd" => !write_line_best_effort(-1, STDERR_TEST_LINE),
+            _ => false,
+        };
+        let after = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) };
+        std::process::exit(i32::from(!child_ok || before != after));
+    }
+
     #[test]
     fn metadata_is_allowlisted_bounded_and_terminal_sequence_is_contiguous() {
         let trace = Trace::new();
@@ -390,63 +550,81 @@ mod tests {
     }
     #[cfg(target_os = "linux")]
     #[test]
-    fn diagnostic_line_is_emitted_as_one_complete_record_to_a_pipe() {
-        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    fn subprocess_emits_exactly_one_complete_record_on_normal_stderr_pipe() {
+        use std::io::Read;
+        use std::process::Stdio;
 
-        let mut fds = [0; 2];
-        assert_eq!(
-            unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
-            0
-        );
-        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-        let line = b"{\"kind\":\"gatt_trial_diagnostics\"}\n";
-        assert!(write_line_best_effort(write_fd.as_raw_fd(), line));
-        let mut received = [0_u8; 128];
-        let count = unsafe {
-            libc::read(
-                read_fd.as_raw_fd(),
-                received.as_mut_ptr().cast(),
-                received.len(),
-            )
-        };
-        assert_eq!(count, line.len() as isize);
-        assert_eq!(&received[..count as usize], line);
+        let (read_fd, write_fd) = pipe(libc::O_CLOEXEC);
+        let mut child = spawn_stderr_child("normal", Stdio::from(std::fs::File::from(write_fd)));
+        let mut received = Vec::new();
+        std::fs::File::from(read_fd)
+            .read_to_end(&mut received)
+            .unwrap();
+        let status = wait_bounded(&mut child);
+        assert!(status.success());
+        assert_eq!(received.last(), Some(&b'\n'));
+        assert_eq!(received.iter().filter(|byte| **byte == b'\n').count(), 1);
+        let report: serde_json::Value = serde_json::from_slice(&received).unwrap();
+        assert_eq!(report["kind"], "gatt_trial_diagnostics");
+        assert_eq!(report["trialId"], "0123456789abcdef0123456789abcdef");
+        assert_eq!(report["authorization"], "never_evaluated");
+        assert_eq!(report["events"][1]["phase"], "terminal");
+        assert_eq!(report["events"][1]["outcome"], "confirmed");
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn full_pipe_never_blocks_or_changes_the_original_fd_flags() {
-        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-        use std::time::Duration;
+    fn closed_reader_pipe_does_not_sigpipe_terminate_the_subprocess() {
+        use std::process::Stdio;
 
-        let mut fds = [0; 2];
-        assert_eq!(
-            unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
-            0
-        );
-        let _read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let (read_fd, write_fd) = pipe(libc::O_CLOEXEC);
+        drop(read_fd);
+        let mut child = spawn_stderr_child("closed", Stdio::from(std::fs::File::from(write_fd)));
+        let status = wait_bounded(&mut child);
+        assert_eq!(status.code(), Some(0), "closed-pipe child: {status:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn full_stderr_pipe_does_not_stall_subprocess_exit_or_change_flags() {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        use std::process::Stdio;
+
+        let (read_fd, write_fd) = pipe(libc::O_CLOEXEC | libc::O_NONBLOCK);
         let fill = [b'x'; 4096];
         loop {
             let written =
                 unsafe { libc::write(write_fd.as_raw_fd(), fill.as_ptr().cast(), fill.len()) };
             if written < 0 {
-                assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EAGAIN));
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EAGAIN)
+                );
                 break;
             }
             assert_eq!(written, fill.len() as isize);
         }
 
-        let flags = unsafe { libc::fcntl(write_fd.as_raw_fd(), libc::F_GETFL) };
-        assert!(flags >= 0);
-        let start = Instant::now();
-        assert!(!write_line_best_effort(
-            write_fd.as_raw_fd(),
-            b"{\"kind\":\"gatt_trial_diagnostics\"}\n"
-        ));
-        assert!(start.elapsed() < Duration::from_secs(1));
-        assert_eq!(unsafe { libc::fcntl(write_fd.as_raw_fd(), libc::F_GETFL) }, flags);
-        assert!(!write_line_best_effort(-1, b"{}\n"));
+        // Keep the reader open, but do not drain capacity before child exit.
+        let mut child = spawn_stderr_child("full", Stdio::from(std::fs::File::from(write_fd)));
+        let status = wait_bounded(&mut child);
+        assert!(status.success());
+        let mut pipe_contents = Vec::new();
+        std::fs::File::from(read_fd)
+            .read_to_end(&mut pipe_contents)
+            .unwrap();
+        assert!(pipe_contents.iter().all(|byte| *byte == b'x'));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_procfs_and_failed_reopen_drop_diagnostics_in_subprocesses() {
+        use std::process::Stdio;
+
+        for mode in ["missing_procfs", "invalid_fd"] {
+            let mut child = spawn_stderr_child(mode, Stdio::null());
+            assert!(wait_bounded(&mut child).success(), "{mode} child failed");
+        }
     }
 }

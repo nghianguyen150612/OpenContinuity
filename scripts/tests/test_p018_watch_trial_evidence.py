@@ -63,6 +63,31 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(p018.InvalidEvidence):
             p018.validate_pair(host, watch)
 
+    def test_host_runtime_export_requires_complete_newline_terminated_line(self):
+        host = self.host_export("e" * 32)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "host.jsonl"
+            path.write_text(json.dumps(host), encoding="utf-8")
+            incomplete = subprocess.run(
+                [sys.executable, str(SCRIPT), "--host", str(path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(incomplete.returncode, 1)
+            self.assertEqual(json.loads(incomplete.stdout)["validation"], "invalid")
+
+            path.write_text(json.dumps(host) + "\n", encoding="utf-8")
+            complete = subprocess.run(
+                [sys.executable, str(SCRIPT), "--host", str(path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(complete.returncode, 0)
+            self.assertIn("valid_partial", complete.stdout)
+            self.assertIn("not_qualified", complete.stdout)
+
     def test_incomplete_host_export_can_report_unavailable_local_label(self):
         host = self.host_export("a" * 32)
         host["trialId"] = None
@@ -87,7 +112,7 @@ class EvidenceTests(unittest.TestCase):
         report = p018.validate_pair(host, watch)
         self.assertEqual(report["claim_alignment"]["P006"], "one_source_reports_success")
         with tempfile.NamedTemporaryFile(mode="w") as f:
-            f.write(json.dumps(host))
+            f.write(json.dumps(host) + "\n")
             f.flush()
             result = subprocess.run([sys.executable, str(SCRIPT), "--host", f.name], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0)
@@ -146,7 +171,7 @@ class EvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             host_path = Path(directory) / "host.json"
             watch_path = Path(directory) / "watch.json"
-            host_path.write_text(json.dumps(self.host_export(trial)))
+            host_path.write_text(json.dumps(self.host_export(trial)) + "\n")
             watch_path.write_text(json.dumps(self.watch_export(trial)))
             result = subprocess.run([sys.executable, str(SCRIPT), "--host", str(host_path), "--watch", str(watch_path)], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0)

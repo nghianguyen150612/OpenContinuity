@@ -107,6 +107,20 @@ def main():
 def load_json(path):
     with Path(path).open("rb") as stream:
         raw = stream.read(MAX_BYTES + 1)
+    return parse_json(raw)
+
+
+def load_host_json(path):
+    with Path(path).open("rb") as stream:
+        raw = stream.read(MAX_BYTES + 1)
+    # Host diagnostics are a single JSONL write. Requiring the final newline
+    # rejects a partial non-pipe write that happened to stop after valid JSON.
+    if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+        raise InvalidEvidence("incomplete host line")
+    return parse_json(raw)
+
+
+def parse_json(raw):
     if len(raw) > MAX_BYTES:
         raise InvalidEvidence("file too large")
     text = raw.decode("utf-8", errors="strict")
@@ -443,7 +457,7 @@ def _main_pair(argv):
     try:
         if len(argv) == 2:
             if argv[0] == "--host":
-                record = validate_host_runtime(load_json(argv[1]))
+                record = validate_host_runtime(load_host_json(argv[1]))
                 source = "host_runtime_observed"
             else:
                 record = validate_watch_runtime(load_json(argv[1]))
@@ -460,9 +474,9 @@ def _main_pair(argv):
                 "authorization": "never_evaluated",
             }
         elif argv[0] == "--host" and argv[2] == "--watch":
-            result = validate_pair(load_json(argv[1]), load_json(argv[3]))
+            result = validate_pair(load_host_json(argv[1]), load_json(argv[3]))
         elif argv[0] == "--watch" and argv[2] == "--host":
-            result = validate_pair(load_json(argv[3]), load_json(argv[1]))
+            result = validate_pair(load_host_json(argv[3]), load_json(argv[1]))
         else:
             raise InvalidEvidence("invalid options")
     except (OSError, UnicodeError, ValueError, TypeError, RecursionError):

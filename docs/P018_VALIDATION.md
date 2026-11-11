@@ -90,8 +90,46 @@ controller validation. Non-pipe destinations such as regular files may still
 experience filesystem I/O latency; this is not a guaranteed hard deadline for
 arbitrary filesystems.
 
-The prior P018 software evidence (191 Rust, 54 Python, Qt and Swift hosted
-jobs) was established before P018A. **P018A final-head CI must be verified
-separately on the exact eventual PR head**; prior workflow runs are historical.
-See the PR #19 Checks tab for the latest push and pull_request results:
+## P018A stderr hardening validation
+
+The formatter failure at starting commit `d14492e36cf4042a5203f4781d479a7b65fe9f8e`
+was caused by two rustfmt-only layout differences in the full-pipe test. The
+production change uses one `write(2)` call on the reopened nonblocking stderr
+description. For pipes, the 2 KiB JSON limit plus newline is below Linux
+`PIPE_BUF`. A temporary calling-thread `SIGPIPE` mask suppresses only a newly
+generated signal on `EPIPE`; the original mask is restored and no global signal
+handler or stderr flags are changed. Missing procfs, a failed reopen, a closed
+or full pipe, and failed writes produce no complete host record. The validator
+requires a single newline-terminated host JSONL line, rejecting a partial
+non-pipe write that happens to end after valid JSON.
+
+On the P018A implementation checkout, these local commands passed:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace --all-targets --quiet`: **196 passed** (CLI 61,
+  private BlueZ D-Bus 25, CLI command tests 13, discovery CLI 3, inventory CLI
+  1, private discovery BlueZ D-Bus 29, core 63, daemon command 1).
+- `cargo build --workspace`
+- `python3 -m unittest discover -s scripts/tests -v`: **55 passed**.
+- `git diff --check`
+
+The focused Linux diagnostic module ran **9 tests**. Four subprocess regression
+tests cover one complete normal stderr line, a readerless pipe with `SIGPIPE`
+set to its default action, a full pipe with a bounded child exit, and unavailable
+procfs/failed reopen. The child compares `F_GETFL` before and after the attempted
+write. The normal child emits exactly one record; failure cases return no
+successful record. The Python evidence test rejects a host JSON prefix missing
+its final newline.
+
+The trace is emitted after the owned BlueZ advertisement/application cleanup
+attempt. This prevents diagnostic output from preceding or delaying that
+cleanup, but does not promise a hard process-return deadline for arbitrary
+regular-file, terminal, device, procfs, or close I/O. Diagnostic delivery is
+best-effort; missing output cannot establish a successful trial.
+
+Hosted Qt and Swift/watchOS results from the preceding P018 head do not qualify
+this P018A change. The exact P018A final-head push and pull-request workflow
+links and conclusions will be recorded here after both events complete.
+Check the PR #19 workflow history:
 https://github.com/nghianguyen150612/OpenContinuity/pull/19/checks
