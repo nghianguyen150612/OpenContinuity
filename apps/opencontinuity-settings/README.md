@@ -21,7 +21,7 @@ smoke tests instead. CLI lookup defaults to `opencontinuity` in the Settings
 executable's own directory, never the current directory or PATH. `--cli` accepts
 one trusted absolute executable path; it receives only fixed `doctor --json` or
 `devices list --json`, or explicit `devices discover --seconds 10 --events-jsonl` arguments.
-Airdrop status is also manual and read-only: the AirDrop page invokes only
+AirDrop status is also manual and read-only: the AirDrop page invokes only
 `airdrop doctor --json`, with a bounded asynchronous process and strict
 schema-v1 validation. Navigating to the page does not refresh status, scan for
 Apple devices, or activate a radio. The Settings Receive control is disabled;
@@ -55,7 +55,7 @@ explicit and bounded as described below. P007–P010 research is informational o
 The known-device section lists BlueZ's already-known objects and says explicitly that
 no Bluetooth scan was performed by that inventory request. Empty, unavailable, denied and stale outcomes are
 distinct. BlueZ `Trusted` does not authenticate an Apple device. No connect,
-pair, forget, initiate a Settings AirDrop receive, AirPods or Watch unlock controls are provided. See the
+pair, forget, initiate a Settings AirDrop receive, AirPods, or Watch unlock controls are provided. See the
 [P012 schema](../../docs/research/P012_DEVICE_SNAPSHOT_SCHEMA.md),
 [UI design](../../docs/research/P012_SETTINGS_DEVICES_UI.md), and
 [validation](../../docs/P012_VALIDATION.md).

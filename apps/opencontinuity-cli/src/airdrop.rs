@@ -354,11 +354,19 @@ fn find_fixed_executable(name: &str) -> Option<PathBuf> {
             return None;
         }
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        (metadata.uid() == 0
-            && metadata.permissions().mode() & 0o111 != 0
-            && metadata.permissions().mode() & 0o022 == 0)
-            .then(|| path.to_path_buf())
+        trusted_executable_metadata(
+            metadata.uid(),
+            metadata.permissions().mode(),
+            metadata.is_file(),
+            metadata.file_type().is_symlink(),
+        )
+        .then(|| path.to_path_buf())
     })
+}
+
+#[cfg(target_os = "linux")]
+fn trusted_executable_metadata(uid: u32, mode: u32, regular: bool, symlink: bool) -> bool {
+    regular && !symlink && uid == 0 && mode & 0o111 != 0 && mode & 0o6022 == 0
 }
 
 #[cfg(target_os = "linux")]
@@ -392,6 +400,24 @@ fn channel_for_frequency(frequency: u16) -> Option<u16> {
         5005..=5895 => Some((frequency - 5000) / 5),
         5955..=7115 => Some((frequency - 5950) / 5),
         _ => None,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod executable_tests {
+    use super::trusted_executable_metadata;
+
+    #[test]
+    fn fixed_backend_must_be_root_owned_nonwritable_and_not_setid() {
+        assert!(trusted_executable_metadata(0, 0o755, true, false));
+        assert!(!trusted_executable_metadata(1000, 0o755, true, false));
+        assert!(!trusted_executable_metadata(0, 0o775, true, false));
+        assert!(!trusted_executable_metadata(0, 0o757, true, false));
+        assert!(!trusted_executable_metadata(0, 0o4755, true, false));
+        assert!(!trusted_executable_metadata(0, 0o2755, true, false));
+        assert!(!trusted_executable_metadata(0, 0o644, true, false));
+        assert!(!trusted_executable_metadata(0, 0o755, false, false));
+        assert!(!trusted_executable_metadata(0, 0o755, true, true));
     }
 }
 

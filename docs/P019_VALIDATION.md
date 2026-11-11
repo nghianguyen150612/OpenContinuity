@@ -29,7 +29,7 @@ P019 working tree before commit; rerun them against the exact final commit.
 | --- | --- |
 | `cargo fmt --all -- --check` | PASS |
 | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace --all-targets` | PASS, 222 tests (82 CLI unit, 25 BlueZ D-Bus, 15 CLI command, 3 discovery CLI, 1 inventory CLI, 29 discovery D-Bus, 66 core, 1 daemon CLI) |
+| `cargo test --workspace --all-targets` | PASS, 223 tests (83 CLI unit, 25 BlueZ D-Bus, 15 CLI command, 3 discovery CLI, 1 inventory CLI, 29 discovery D-Bus, 66 core, 1 daemon CLI) |
 | `cargo build --workspace` | PASS |
 | `python3 -m unittest discover -s scripts/tests -v` | PASS, 55 tests |
 | `git diff --check` | PASS |
@@ -37,7 +37,8 @@ P019 working tree before commit; rerun them against the exact final commit.
 | Swift, CryptoKit, watchOS compile and packaging | Hosted macOS CI required |
 
 The first parallel Rust workspace run had two transient private BlueZ test-bus
-timeouts. An immediate full rerun passed all 222 tests without test changes.
+timeouts. An immediate full rerun passed all 222 tests without test changes;
+after adding executable trust-mode coverage, the full suite passed all 223.
 This is recorded rather than hidden; the final-head hosted workflow is still
 required to assess repeatability.
 

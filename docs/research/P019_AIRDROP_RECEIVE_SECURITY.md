@@ -11,9 +11,11 @@ Apple identity; OpenContinuity does not possess Apple's identity records or
 Contacts Only credentials.
 
 The external executable is trusted local software, not a sandbox. Fixed
-absolute paths and argv prevent shell interpretation and PATH substitution,
-but do not cryptographically authenticate a binary replaced by a privileged
-local actor. Upstream may display sender name, file names and offered metadata
+absolute paths are accepted only for root-owned regular non-symlink files that
+are executable, not group/world writable, and do not have setuid/setgid bits.
+Fixed argv prevents shell interpretation and PATH substitution, but does not
+cryptographically authenticate a binary replaced by a privileged local actor.
+Upstream may display sender name, file names and offered metadata
 on terminal stderr as part of its consent prompt; this output is local and is
 never copied into JSON or diagnostics.
 
