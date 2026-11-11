@@ -134,3 +134,22 @@ and [validation](P018_VALIDATION.md). Software tests and fake BlueZ checks do
 not qualify physical Arch RF, native Wayland or signed Watch SE 2 behavior. W0–W6
 remain NOT RUN/BLOCKED, P010 and native Auto Unlock remain NO-GO, and
 `authorization: never_evaluated`.
+
+## P019 — AirDrop/AWDL foundation and safe receive integration (provisional)
+
+P019 begins the second ecosystem priority with read-only Linux Wi-Fi/AWDL
+status, optional fixed-version Owly receiver supervision, private staging and a
+Settings status page. The process uses only an already-active `awdl0`; it never
+starts Owly radio services, configures Wi-Fi, changes the firewall or accepts a
+transfer automatically. Owly's library requires Rust 1.88 and its CLI does not
+expose strict aggregate resource controls, so this branch preserves Rust 1.85
+and documents the staging-budget risk. Settings Receive stays disabled;
+interactive use is terminal-only.
+
+The [upstream audit](research/P019_UPSTREAM_AND_LICENSE_AUDIT.md),
+[architecture](research/P019_AWDL_BACKEND_ARCHITECTURE.md),
+[receive security review](research/P019_AIRDROP_RECEIVE_SECURITY.md),
+[RTL8852BE/iPhone 13 plan](research/P019_RTL8852BE_PHYSICAL_QUALIFICATION.md)
+and [validation](P019_VALIDATION.md) separate software and physical evidence.
+RTL8852BE behavior, iPhone discovery/transfer, advertisement and real cleanup
+are NOT RUN. No P020 work is included.

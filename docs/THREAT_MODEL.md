@@ -165,3 +165,28 @@ authorization. Diagnostic overflow or a missing session terminal marks host or
 Watch evidence incomplete. Imported
 Watch/runtime records remain untrusted. No telemetry, automatic scan, pairing,
 trust mutation or login integration is added. `authorization: never_evaluated`.
+
+## P019 AirDrop receive and AWDL status
+
+P019 status is read-only and exposes a bounded set of local radio facts; the
+doctor can include the explicitly requested PCI ID, driver, kernel and channel
+in a local report. It does not include SSID, BSSID, interface address, device
+name, D-Bus path or transfer payload. The selected Owly executable is trusted
+local software, not sandboxed. Its terminal prompt may display untrusted sender
+and file metadata locally; that text is not copied into JSON. Only exact Owly
+0.4.2 in a fixed system path is considered, and the process never receives
+`--accept` or a shell command.
+
+The operator selects a destination and explicitly declares that radio setup is
+prepared. Receive uses a same-user lock, private staging, path/type/link/count/
+size checks, a per-file resource limit and no-overwrite finalization. Because
+Owly's public CLI does not expose aggregate decompressed-size and concurrency
+controls, periodic inspection can lag an active transfer and disk usage can
+temporarily exceed the published tree budget. There is no hard filesystem
+quota; Settings keeps Receive disabled. Owner-only output permissions reduce
+other-user exposure, but do not defend against another process running as the
+same account or a compromised local backend. Temporary Owly TLS identity files
+are removed on normal exit but are not securely erased. Receiver availability
+and software fixtures cannot prove AirDrop discovery, Apple identity, RF
+transfer or physical compatibility. Native Watch Auto Unlock remains NO-GO
+and all authorization remains `never_evaluated`.

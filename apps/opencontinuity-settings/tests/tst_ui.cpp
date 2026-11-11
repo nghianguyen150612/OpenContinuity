@@ -1,4 +1,5 @@
 #include "DoctorProvider.h"
+#include "AirdropStatusProvider.h"
 #include "DeviceInventoryProvider.h"
 #include "DeviceDiscoveryProvider.h"
 #include <QGuiApplication>
@@ -69,12 +70,15 @@ private slots:
     DoctorProvider backend({cli});
     const auto inventoryCli = unavailable ? QString("/nonexistent/opencontinuity")
         : qEnvironmentVariable("OC_INVENTORY_CLI", QCoreApplication::applicationDirPath() + "/doctor-fixture");
+    AirdropStatusProvider airdropStatus({inventoryCli});
     DeviceInventoryProvider inventory({inventoryCli});
     DeviceDiscoveryProvider discovery({inventoryCli, 22000, 200});
     qmlRegisterUncreatableType<StatusModel>("OpenContinuity.Backend", 1, 0,
                                             "StatusModel", "Owned");
     qmlRegisterUncreatableType<DoctorProvider>("OpenContinuity.Backend", 1, 0,
                                                "DoctorProvider", "Owned");
+    qmlRegisterUncreatableType<AirdropStatusProvider>(
+        "OpenContinuity.Backend", 1, 0, "AirdropStatusProvider", "Owned");
     qmlRegisterUncreatableType<DeviceInventoryModel>("OpenContinuity.Backend", 1, 0,
                                                      "DeviceInventoryModel", "Owned");
     qmlRegisterUncreatableType<DeviceInventoryProvider>("OpenContinuity.Backend", 1, 0,
@@ -84,6 +88,7 @@ private slots:
     QQmlApplicationEngine engine;
     QSignalSpy warnings(&engine, &QQmlEngine::warnings);
     engine.rootContext()->setContextProperty("doctor", &backend);
+    engine.rootContext()->setContextProperty("airdropStatus", &airdropStatus);
     engine.rootContext()->setContextProperty("deviceInventory", &inventory);
     engine.rootContext()->setContextProperty("deviceDiscovery", &discovery);
     engine.load(QUrl("qrc:/qml/Main.qml"));
@@ -114,6 +119,19 @@ private slots:
       QVERIFY(heading);
       QCOMPARE(heading->property("text").toString(), pages[i]);
       QVERIFY(window->findChild<QObject *>("settingsPage"));
+      if (i == 3) {
+        auto *refresh = window->findChild<QQuickItem *>("airdropRefresh");
+        QVERIFY(refresh);
+        QVERIFY(refresh->property("enabled").toBool());
+        QCOMPARE(airdropStatus.state(), "not_refreshed");
+        auto *receive = window->findChild<QObject *>("airdropReceiveDisabled");
+        QVERIFY(receive);
+        QVERIFY(!receive->property("enabled").toBool());
+        refresh->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(airdropStatus.state(),
+                     unavailable ? "cli_unavailable" : "loaded");
+      }
       if (!unavailable && (i == 2 || i == 4)) {
         const auto cap = backend.capability(i == 2 ? "apple_watch_auto_unlock" : "airpods_settings");
         QCOMPARE(cap.value("state").toString(), "unsupported");

@@ -147,3 +147,25 @@ Watch or prove a radio exchange. The offline P018 checker validates the host and
 Watch exports independently and together without D-Bus, network or BLE access.
 Its output always leaves hardware unqualified. See the P018 schema, privacy
 review, and validation report. Physical W0–W6 remain NOT RUN/BLOCKED.
+
+## P019 AirDrop/AWDL foundation
+
+`opencontinuity_core::airdrop` defines backend/plane states and the receive
+lifecycle. The Linux CLI performs fixed-path, read-only sysfs/procfs, `iw` and
+Owly 0.4.2 doctor probes. Settings consumes only `airdrop doctor --json`
+through a strict asynchronous C++ bridge; the page has a manual refresh and no
+receiver action. Terminal receive supervises fixed Owly with explicit consent,
+an already-prepared `awdl0`, bounded duration, process-group cleanup, a private
+XDG runtime identity directory and private staging. The selected destination
+is the only publication target; accepted output is validated and moved without
+overwriting existing files.
+
+Owly, not OpenContinuity, implements the AWDL radio, mDNS/TLS and
+`/Discover`/`/Ask`/`/Upload` paths. OpenContinuity never starts `owlyd` or
+changes the radio. The external CLI does not expose all library resource caps
+or structured advertisement/progress events, so aggregate staging limits are
+polled rather than enforced by a filesystem quota; Settings keeps Receive
+disabled. Reports keep control, advertisement and data plane independent and
+retain `authorization: never_evaluated` and
+`physicalQualification: not_qualified`. See the [P019 architecture](research/P019_AWDL_BACKEND_ARCHITECTURE.md)
+and [security review](research/P019_AIRDROP_RECEIVE_SECURITY.md).

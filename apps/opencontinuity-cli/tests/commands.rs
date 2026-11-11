@@ -239,6 +239,36 @@ fn doctor_json_command_emits_valid_unknown_and_unsupported_states() {
 }
 
 #[test]
+fn airdrop_doctor_reports_versioned_read_only_status_without_identifiers() {
+    let result = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args(["airdrop", "doctor", "--json"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(result.stderr.is_empty());
+    assert!(result.stdout.len() <= 64 * 1024);
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["kind"], "airdrop_backend_status");
+    assert_eq!(report["authorization"], "never_evaluated");
+    assert_eq!(report["physicalQualification"], "not_qualified");
+    assert!(report["radio"].get("bssid").is_none());
+    assert!(report["radio"].get("ssid").is_none());
+    assert!(report["radio"].get("interfaceAddress").is_none());
+}
+
+#[test]
+fn airdrop_status_rejects_unknown_options_without_starting_a_session() {
+    let result = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args(["airdrop", "doctor", "--activate-radio"])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Usage:"));
+}
+
+#[test]
 fn research_watch_fixture_is_read_only_and_deterministic() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
