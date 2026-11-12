@@ -112,7 +112,11 @@ fn probe() -> AirDropReport {
         report.block_reason = Some(BlockReason::BackendProbeFailed);
         return report;
     };
-    if doctor.timed_out || doctor.stdout_truncated || doctor.stderr_truncated {
+    if doctor.timed_out
+        || doctor.stdout_truncated
+        || doctor.stderr_truncated
+        || !doctor.status.success()
+    {
         report.block_reason = Some(BlockReason::BackendProbeFailed);
         return report;
     }
