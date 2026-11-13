@@ -45,9 +45,11 @@ pub struct ReceiveLock {
 #[derive(Debug)]
 pub struct ReceiveSessionState {
     root: PathBuf,
+    keep: bool,
 }
 
 impl ReceiveSessionState {
+    pub fn retain_until_quiescent(&mut self) { self.keep = true; }
     pub fn create_runtime() -> io::Result<Self> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
             io::Error::new(
@@ -90,7 +92,7 @@ impl ReceiveSessionState {
             #[cfg(unix)]
             builder.mode(0o700);
             match builder.create(&root) {
-                Ok(()) => return Ok(Self { root }),
+                Ok(()) => return Ok(Self { root, keep: false }),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
@@ -108,7 +110,7 @@ impl ReceiveSessionState {
 
 impl Drop for ReceiveSessionState {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
+        if !self.keep { let _ = fs::remove_dir_all(&self.root); }
     }
 }
 
@@ -179,6 +181,8 @@ impl ReceiveLock {
 }
 
 impl ReceiveStaging {
+    pub fn retain_until_quiescent(&mut self) { self.keep = true; }
+    pub fn preserve(mut self) { self.keep = true; }
     /// Canonicalize the operator-selected existing destination, then create a
     /// private staging directory on the same filesystem for atomic finalizing.
     pub fn create(destination: &Path) -> io::Result<Self> {

@@ -587,7 +587,7 @@ mod receive {
                 ReceiveState::Failed,
             );
         }
-        let staging = match ReceiveStaging::create(&options.destination) {
+        let mut staging = match ReceiveStaging::create(&options.destination) {
             Ok(staging) => staging,
             Err(_) => {
                 return print_blocked(
@@ -597,7 +597,7 @@ mod receive {
                 );
             }
         };
-        let session_state = match ReceiveSessionState::create_runtime() {
+        let mut session_state = match ReceiveSessionState::create_runtime() {
             Ok(state) => state,
             Err(_) => {
                 return print_blocked(
@@ -642,6 +642,8 @@ mod receive {
             }
         };
 
+        staging.retain_until_quiescent();
+        session_state.retain_until_quiescent();
         let Some(child_stdout) = child.stdout.take() else {
             terminate_child(&mut child, Duration::from_secs(2));
             return print_blocked(
@@ -718,19 +720,17 @@ mod receive {
         for id in signal_ids {
             signal_hook::low_level::unregister(id);
         }
-        let (files, bytes, cleanup) = if matches!(end_reason, EndReason::OutputLimitExceeded) {
-            let cleanup = if staging.discard().is_ok() {
-                "complete"
-            } else {
-                "incomplete"
-            };
-            (0, 0, cleanup)
-        } else {
-            match staging.finalize() {
-                Ok(result) => (result.files, result.bytes, "complete"),
-                Err(_) => (0, 0, "incomplete"),
-            }
-        };
+        // A reaped leader is not evidence that descendants stopped writing.
+        let writers_quiescent = false;
+        let eligible = publication_eligible(
+            end_reason, state, child_status, &cancelled,
+            &output_exceeded, &output_failed, writers_quiescent,
+        );
+        let (files, bytes, cleanup) = finish_staging(staging, eligible, writers_quiescent);
+        if matches!(state, ReceiveState::Completed) && !eligible {
+            state = ReceiveState::Failed;
+            end_reason = EndReason::Failed;
+        }
         let block_reason = match end_reason {
             EndReason::Cancelled => Some(BlockReason::Cancelled),
             EndReason::Expired => Some(BlockReason::SessionExpired),
@@ -773,6 +773,40 @@ mod receive {
             ExitCode::SUCCESS
         } else {
             ExitCode::from(1)
+        }
+    }
+
+    fn publication_eligible(
+        reason: EndReason,
+        state: ReceiveState,
+        backend: BackendState,
+        cancelled: &AtomicBool,
+        exceeded: &AtomicBool,
+        failed: &AtomicBool,
+        writers_quiescent: bool,
+    ) -> bool {
+        matches!(reason, EndReason::BackendExited)
+            && state == ReceiveState::Completed
+            && backend == BackendState::Available
+            && !cancelled.load(Ordering::Relaxed)
+            && !exceeded.load(Ordering::Relaxed)
+            && !failed.load(Ordering::Relaxed)
+            && writers_quiescent
+    }
+
+    fn finish_staging(
+        staging: ReceiveStaging, eligible: bool, writers_quiescent: bool,
+    ) -> (u64, u64, &'static str) {
+        if !writers_quiescent {
+            staging.preserve();
+            return (0, 0, "incomplete");
+        }
+        if !eligible {
+            return (0, 0, if staging.discard().is_ok() { "complete" } else { "incomplete" });
+        }
+        match staging.finalize() {
+            Ok(result) => (result.files, result.bytes, "complete"),
+            Err(_) => (0, 0, "incomplete"),
         }
     }
 
@@ -1006,6 +1040,37 @@ mod receive {
             let mut unknown = args.to_vec();
             unknown.push("--activate-radio".into());
             assert!(Options::parse(&unknown).is_err());
+        }
+
+        #[test]
+        fn failed_sessions_never_publish() {
+            for (reason, state, backend, cancel, exceeded, failed) in [
+                (EndReason::Cancelled, ReceiveState::Cancelled, BackendState::Available, true, false, false),
+                (EndReason::Expired, ReceiveState::Expired, BackendState::Available, false, false, false),
+                (EndReason::Failed, ReceiveState::Failed, BackendState::Failed, false, false, false),
+                (EndReason::BackendExited, ReceiveState::Completed, BackendState::Available, false, false, true),
+                (EndReason::OutputLimitExceeded, ReceiveState::Failed, BackendState::Failed, false, true, false),
+            ] {
+                let destination = tempfile::tempdir().unwrap();
+                std::fs::write(destination.path().join("existing"), b"keep").unwrap();
+                let stage = ReceiveStaging::create(destination.path()).unwrap();
+                std::fs::write(stage.path().join("partial"), b"unsafe").unwrap();
+                let eligible = publication_eligible(reason, state, backend, &AtomicBool::new(cancel),
+                    &AtomicBool::new(exceeded), &AtomicBool::new(failed), true);
+                assert!(!eligible);
+                assert_eq!(finish_staging(stage, eligible, true), (0, 0, "complete"));
+                assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 1);
+            }
+        }
+
+        #[test]
+        fn unknown_writers_preserve_containment_and_never_publish() {
+            let destination = tempfile::tempdir().unwrap();
+            let stage = ReceiveStaging::create(destination.path()).unwrap();
+            let path = stage.path().to_owned();
+            std::fs::write(path.join("partial"), b"unsafe").unwrap();
+            assert_eq!(finish_staging(stage, false, false), (0, 0, "incomplete"));
+            assert!(path.join("partial").exists());
         }
 
         fn fixture_child(mode: &str) -> std::process::Child {
