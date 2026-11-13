@@ -139,10 +139,37 @@ fn collect_child(
         if Instant::now() >= deadline {
             timed_out = true;
             let _ = child.kill();
-            break child.wait()?;
+            let stop_deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if child.try_wait()?.is_some() {
+                    break;
+                }
+                if Instant::now() >= stop_deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "child termination unknown",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            break child
+                .try_wait()?
+                .ok_or_else(|| io::Error::other("child status unavailable"))?;
         }
         thread::sleep(Duration::from_millis(10));
     };
+    let relay_deadline = Instant::now() + Duration::from_secs(2);
+    while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+        if Instant::now() >= relay_deadline {
+            // A descendant may hold a pipe open. Detached readers retain only
+            // bounded buffers; never turn leader exit into probe success.
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "output relay incomplete",
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
     let stdout = stdout_reader
         .join()
         .map_err(|_| io::Error::other("stdout reader failed to join"))??;
@@ -171,6 +198,16 @@ mod tests {
     #[test]
     fn process_fixture_child() {
         match std::env::var(FIXTURE_MODE).as_deref() {
+            Ok("doctor") => {
+                print!("{}", std::env::var("OC_P019_DOCTOR_JSON").unwrap());
+                std::process::exit(
+                    std::env::var("OC_P019_DOCTOR_EXIT")
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                );
+            }
+            Ok("nonzero") => std::process::exit(7),
             Ok("flood") => {
                 let mut out = std::io::stdout().lock();
                 for _ in 0..256 {
@@ -230,6 +267,73 @@ mod tests {
         let output = collect_child(&mut child, Duration::from_millis(50), 128).unwrap();
         assert!(output.timed_out);
         assert!(!output.status.success());
+    }
+
+    #[test]
+    fn doctor_process_contract_uses_production_parser() {
+        let valid = serde_json::json!({
+            "station": "wlan0", "driver": "mt7925e", "device": null,
+            "status": "tested", "mode": "shared", "channel": 44,
+            "card": null, "hardware": true, "missing": [], "issues": []
+        });
+        let mut cases = vec![(valid.clone(), 0, Some(true)), (valid.clone(), 7, None)];
+        for key in [
+            "station", "driver", "device", "status", "mode", "channel", "card", "hardware",
+            "missing", "issues",
+        ] {
+            let mut bad = valid.clone();
+            bad.as_object_mut().unwrap().remove(key);
+            cases.push((bad, 0, None));
+        }
+        for (key, bad_value) in [
+            ("status", serde_json::json!("future")),
+            ("mode", serde_json::json!("future")),
+            (
+                "missing",
+                serde_json::json!([{"id":"unexpected","say":"x"}]),
+            ),
+            ("issues", serde_json::json!([1])),
+            ("hardware", serde_json::json!("true")),
+            ("card", serde_json::json!({})),
+        ] {
+            let mut bad = valid.clone();
+            bad[key] = bad_value;
+            cases.push((bad, 0, None));
+        }
+        let mut unprepared = valid.clone();
+        unprepared["missing"] = serde_json::json!([{"id":"radio","say":"not prepared"}]);
+        cases.push((unprepared, 0, Some(false)));
+        for (json, code, expected) in cases {
+            let mut output = run_bounded(
+                Path::new("/bin/sh"),
+                [
+                    "-c",
+                    r#"printf '%s' "$1"; exit "$2""#,
+                    "fixture",
+                    &json.to_string(),
+                    &code.to_string(),
+                ],
+                Duration::from_secs(2),
+                65536,
+            )
+            .unwrap();
+            assert_eq!(
+                crate::airdrop::doctor_ready(&output).ok(),
+                expected,
+                "{json}"
+            );
+            for flag in 0..3 {
+                output.timed_out = flag == 0;
+                output.stdout_truncated = flag == 1;
+                output.stderr_truncated = flag == 2;
+                assert!(crate::airdrop::doctor_ready(&output).is_err());
+            }
+            output.timed_out = false;
+            output.stdout_truncated = false;
+            output.stderr_truncated = false;
+            output.stdout = b"{bad json".to_vec();
+            assert!(crate::airdrop::doctor_ready(&output).is_err());
+        }
     }
 
     #[test]

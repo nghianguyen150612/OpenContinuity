@@ -27,8 +27,8 @@ iPhone ───────────────────── AWDL + mD
 ```
 
 The diagram describes intended process boundaries, not a measured radio path.
-OpenContinuity neither creates `awdl0` nor owns an `owlyd` lease. A live
-receiver can start only if the local read-only preflight sees exact Owly 0.4.2,
+OpenContinuity neither creates `awdl0` nor owns an `owlyd` lease. Receive activation is blocked pending writer containment. The read-only
+preflight still requires the local read-only preflight sees exact Owly 0.4.2,
 an already-up `awdl0`, a link-local address, and a successful Owly doctor
 report. A preflight result is not a connection or an interoperability claim.
 
@@ -54,8 +54,9 @@ It additionally requires terminal stdin/stderr and a same-user private
 `XDG_RUNTIME_DIR`. A nonblocking `flock` prevents another OpenContinuity
 receive. The child executable comes from fixed absolute paths and gets a fixed
 argument vector, a generic local receiver name, a new session/process group,
-and `RLIMIT_FSIZE`. SIGINT and SIGTERM request a short graceful stop, followed
-by process-group SIGKILL on deadline. Child output is sent only to the local
+and `RLIMIT_FSIZE`. The dormant supervisor only kills its owned direct child with bounded polling.
+It cannot establish descendant quiescence and does not signal numeric process
+groups after leader reaping. Child output is sent only to the local
 terminal's stderr; JSON status stays on stdout.
 
 No `owly radio up`, `owlyd` startup, D-Bus privilege request, daemon install,
@@ -82,3 +83,13 @@ types, duplicate JSON members, output size, process deadline and exit status.
 Generation checks discard stale callbacks. The UI only exposes a manual status
 refresh and clearly shows unknown/block reasons; it does not list fictitious
 peers or expose a receive control that cannot present the backend's consent UI.
+
+## P019A publication boundary
+
+[Receive hardening](P019A_RECEIVE_PUBLICATION_HARDENING.md) supersedes the
+original process-group cleanup assumption. Receive now fails closed before
+backend startup. The tested storage primitive publishes one private bundle via
+a descriptor-relative no-replace directory rename, only after validation and
+independently verified writer quiescence. No such quiescence provider is enabled.
+Failed sessions never publish. Unknown writers retain containment rather than
+triggering unsafe deletion. Atomic visibility is not crash durability.

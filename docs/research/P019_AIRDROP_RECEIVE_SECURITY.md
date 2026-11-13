@@ -28,8 +28,11 @@ same-user runtime directory, and a singleton lock. It does not activate or
 reconfigure a radio. A separate physical runbook is required for any Owly
 radio setup that may interrupt Wi-Fi or require privileges.
 
-The session has a 15–3600 second deadline. SIGINT/SIGTERM stop the child
-process group with a bounded grace period and then kill it. Owly's generated
+P019A currently blocks receive activation with writer_containment_unavailable.
+The following describes the dormant supervisor, not an available receive path.
+The session has a 15–3600 second deadline. The direct child may be killed with bounded polling; group termination is
+not established. Escaped descendants cannot be accounted for, so publication
+is blocked. Unknown writers require retained staging and runtime state. Owly's generated
 TLS identity is placed under a unique private directory in `XDG_RUNTIME_DIR`
 and that directory is removed when the OpenContinuity process exits normally.
 Abrupt power loss can leave runtime files until the OS clears the runtime
@@ -53,9 +56,10 @@ passes only that path to Owly. It rejects symlinks, hard-linked files, special
 files, dotfiles, path separators, control/bidi characters, long names, deep
 trees, excessive files/directories and over-budget sizes. Interrupted Owly
 `.owly-staging-*` directories are removed; partial data is never deliberately
-published. Before finalization, directories become 0700 and files 0600. Each
-top-level item is moved with Linux `renameat2(RENAME_NOREPLACE)`; collisions
-receive a new suffix instead of replacing an existing file. Received content
+published. Before finalization, directories become 0700 and files 0600. One
+descriptor-relative renameat2(RENAME_NOREPLACE) publishes the whole validated
+tree as AirDrop Receive <random-id>, with bounded collision retries. Atomic
+visibility does not imply crash persistence. Received content
 is not opened, parsed by OpenContinuity, extracted again, executed or treated
 as trusted.
 
@@ -85,3 +89,10 @@ All results retain `authorization: never_evaluated` and
 `physicalQualification: not_qualified`. No real RF, iPhone identity, Apple
 Account, Contacts Only, signature validation, Linux login authorization or
 Apple Watch behavior is asserted by CI.
+
+## P019A correction
+
+The earlier finalize path published after failed sessions. This is fixed with
+explicit eligibility checks and a fail-closed writer-containment gate. See
+[P019A hardening](P019A_RECEIVE_PUBLICATION_HARDENING.md) for the current
+blocked receive behavior, JSON counts, retained-state policy and limitations.

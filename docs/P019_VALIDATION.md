@@ -1,5 +1,24 @@
 # P019 validation
 
+## P019A recovery
+
+The historical results below do not validate P019A. See
+[receive publication hardening](research/P019A_RECEIVE_PUBLICATION_HARDENING.md).
+Receive now reports writer_containment_unavailable before backend startup.
+Atomic bundle storage and strict pinned doctor parsing have deterministic
+software regressions. Descendant containment and graceful process-group
+escalation are unsupported; no receive publication is enabled.
+
+P019A local validation: workspace tests passed 235 tests (95 CLI unit,
+25 BlueZ D-Bus, 15 CLI command, 3 discovery CLI, 1 inventory CLI,
+29 discovery D-Bus, 66 core, 1 daemon CLI); Python passed 55 tests.
+Formatting, Clippy with warnings denied, build and whitespace gates are
+rerun before delivery. Final-head hosted results are recorded with delivery
+evidence; older green workflows are not evidence for this recovery.
+Qt/QML, Swift/CryptoKit and watchOS gates are unchanged. Physical qualification
+remains not_qualified and authorization remains never_evaluated.
+
+
 P019 is software work only. This report records the current branch's tested
 state separately from physical qualification. The local and hosted results
 below are tied to implementation commit

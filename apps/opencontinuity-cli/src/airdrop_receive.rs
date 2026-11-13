@@ -262,6 +262,7 @@ impl ReceiveStaging {
     /// Leftover Owly `.owly-staging-*` directories contain interrupted upload
     /// data and are discarded. Every final move uses RENAME_NOREPLACE.
     pub fn finalize(mut self) -> io::Result<FinalizedReceive> {
+        self.usage()?;
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
             let file_name = entry.file_name();
@@ -672,6 +673,68 @@ mod tests {
         let invalid = CString::new("missing/target").unwrap();
         assert!(rename_bundle(&stage.destination, &source, &invalid).is_err());
         assert!(stage.path().join("file").exists());
+    }
+
+    #[test]
+    fn hardlinks_fifo_and_total_limit_never_publish() {
+        for kind in ["hardlink", "fifo", "total"] {
+            let root = tempfile::tempdir().unwrap();
+            let stage = ReceiveStaging::create(root.path()).unwrap();
+            fs::write(stage.path().join("first"), b"x").unwrap();
+            match kind {
+                "hardlink" => {
+                    fs::hard_link(stage.path().join("first"), stage.path().join("second")).unwrap()
+                }
+                "fifo" => {
+                    let path = path_cstring(&stage.path().join("fifo")).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+                }
+                _ => {
+                    for i in 0..3 {
+                        File::create(stage.path().join(format!("large{i}")))
+                            .unwrap()
+                            .set_len(MAX_RECEIVE_FILE_BYTES)
+                            .unwrap();
+                    }
+                }
+            }
+            assert!(stage.finalize().is_err(), "{kind}");
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn concurrent_collision_is_kernel_enforced_and_parent_rename_is_pinned() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("destination");
+        fs::create_dir(&destination).unwrap();
+        let stage = ReceiveStaging::create(&destination).unwrap();
+        fs::write(stage.path().join("file"), b"abc").unwrap();
+        let moved = root.path().join("moved");
+        fs::rename(&destination, &moved).unwrap();
+        fs::create_dir(&destination).unwrap();
+        stage.finalize().unwrap();
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+        assert_eq!(fs::read(bundle_path(&moved).join("file")).unwrap(), b"abc");
+
+        let stage = ReceiveStaging::create(&destination).unwrap();
+        let source = path_cstring(Path::new(stage.root.file_name().unwrap())).unwrap();
+        let fd = stage.destination.try_clone().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let other = barrier.clone();
+        let maker = std::thread::spawn(move || {
+            other.wait();
+            let target = CString::new("AirDrop Receive concurrent").unwrap();
+            unsafe { libc::mkdirat(fd.as_raw_fd(), target.as_ptr(), 0o700) }
+        });
+        barrier.wait();
+        let target = CString::new("AirDrop Receive concurrent").unwrap();
+        let result = rename_bundle(&stage.destination, &source, &target);
+        let created = maker.join().unwrap();
+        assert!(result.is_ok() || created == 0);
+        if let Err(error) = result {
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        }
     }
 
     #[test]

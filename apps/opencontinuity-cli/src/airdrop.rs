@@ -95,7 +95,7 @@ fn probe() -> AirDropReport {
         report.block_reason = Some(BlockReason::BackendVersionUnsupported);
         return report;
     };
-    if actual_version != OWLY_VERSION {
+    if !supported_owly_version(actual_version) {
         report.block_reason = Some(BlockReason::BackendVersionUnsupported);
         report.backend = BackendState::Unknown;
         return report;
@@ -112,24 +112,12 @@ fn probe() -> AirDropReport {
         report.block_reason = Some(BlockReason::BackendProbeFailed);
         return report;
     };
-    if doctor.timed_out
-        || doctor.stdout_truncated
-        || doctor.stderr_truncated
-        || !doctor.status.success()
-    {
-        report.block_reason = Some(BlockReason::BackendProbeFailed);
-        return report;
-    }
-    let Ok(json) = serde_json::from_slice::<Value>(&doctor.stdout) else {
-        report.block_reason = Some(BlockReason::BackendProbeFailed);
-        return report;
-    };
-    let Some(missing) = json.get("missing").and_then(Value::as_array) else {
+    let Ok(ready) = doctor_ready(&doctor) else {
         report.block_reason = Some(BlockReason::BackendProbeFailed);
         return report;
     };
     report.source = ObservationSource::OwlyDoctor;
-    if !missing.is_empty() {
+    if !ready {
         report.backend = BackendState::Blocked;
         report.control_plane = PlaneState::Blocked;
         report.block_reason = Some(BlockReason::BackendProbeFailed);
@@ -154,6 +142,104 @@ fn probe() -> AirDropReport {
     report.advertisement = PlaneState::Unknown;
     report.live_airdrop_interoperability = BackendState::Unknown;
     report
+}
+
+fn supported_owly_version(version: &str) -> bool {
+    version == OWLY_VERSION
+}
+
+/// Owly 0.4.2 Capabilities/Card/ChannelUse at upstream 6f2e8ea.
+fn doctor_ready(output: &process::CommandOutput) -> Result<bool, ()> {
+    if output.timed_out
+        || output.stdout_truncated
+        || output.stderr_truncated
+        || !output.status.success()
+    {
+        return Err(());
+    }
+    let json: Value = serde_json::from_slice(&output.stdout).map_err(|_| ())?;
+    validate_doctor(&json)
+}
+
+fn validate_doctor(json: &Value) -> Result<bool, ()> {
+    let object = json.as_object().ok_or(())?;
+    for key in ["station", "driver", "device"] {
+        let value = object.get(key).ok_or(())?;
+        if !value.is_null() && !value.is_string() {
+            return Err(());
+        }
+    }
+    for (key, values) in [
+        ("status", &["tested", "untested", "broken"][..]),
+        ("mode", &["shared", "exclusive", "active-monitor"][..]),
+    ] {
+        let value = object.get(key).ok_or(())?;
+        if !value.is_null() && !value.as_str().is_some_and(|s| values.contains(&s)) {
+            return Err(());
+        }
+    }
+    let channel = object.get("channel").ok_or(())?;
+    if !channel.is_null() && channel.as_u64().is_none_or(|n| n > 255) {
+        return Err(());
+    }
+    let hardware = object.get("hardware").and_then(Value::as_bool).ok_or(())?;
+    let issues = object.get("issues").and_then(Value::as_array).ok_or(())?;
+    if !issues.iter().all(Value::is_string) {
+        return Err(());
+    }
+    let missing = object.get("missing").and_then(Value::as_array).ok_or(())?;
+    for entry in missing {
+        if !matches!(
+            entry.get("id").and_then(Value::as_str),
+            Some("hardware" | "backend" | "radio")
+        ) || !entry.get("say").is_some_and(Value::is_string)
+        {
+            return Err(());
+        }
+    }
+    let card = object.get("card").ok_or(())?;
+    if !card.is_null() {
+        if !card.get("phy").is_some_and(Value::is_string) {
+            return Err(());
+        }
+        for key in [
+            "ibss",
+            "ap",
+            "active_monitor",
+            "monitor_beside_station",
+            "ibss_beside_station",
+            "self_managed_reg",
+        ] {
+            if !card.get(key).is_some_and(Value::is_boolean) {
+                return Err(());
+            }
+        }
+        let regdom = card.get("regdom").ok_or(())?;
+        if !regdom.is_null() && !regdom.is_string() {
+            return Err(());
+        }
+        for channel in card.get("channels").and_then(Value::as_array).ok_or(())? {
+            if channel
+                .get("channel")
+                .and_then(Value::as_u64)
+                .is_none_or(|n| n > 255)
+                || channel
+                    .get("freq")
+                    .and_then(Value::as_u64)
+                    .is_none_or(|n| n > u32::MAX.into())
+                || !channel.get("transmit").is_some_and(Value::is_boolean)
+            {
+                return Err(());
+            }
+            // Upstream omits 'why' when it is None.
+            if let Some(why) = channel.get("why") {
+                if !why.is_null() && !why.is_string() {
+                    return Err(());
+                }
+            }
+        }
+    }
+    Ok(missing.is_empty() && hardware)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -727,6 +813,13 @@ mod receive {
             state = ReceiveState::Failed;
             child_status = BackendState::Failed;
         }
+        if cancelled.load(Ordering::Relaxed) {
+            end_reason = EndReason::Cancelled;
+            state = ReceiveState::Cancelled;
+        } else if Instant::now() >= deadline && matches!(end_reason, EndReason::BackendExited) {
+            end_reason = EndReason::Expired;
+            state = ReceiveState::Expired;
+        }
         for id in signal_ids {
             signal_hook::low_level::unregister(id);
         }
@@ -1085,6 +1178,58 @@ mod receive {
         }
 
         #[test]
+        fn unsupported_versions_and_unprepared_radios_stay_blocked() {
+            for version in ["0.4.1", "0.4.3", "0.4.2-dev", "", "1.0.0"] {
+                assert!(!supported_owly_version(version));
+            }
+            assert!(supported_owly_version("0.4.2"));
+            // These remain independent mandatory preflight conditions.
+            for (interface, link_local) in [
+                (BackendState::Unknown, true),
+                (BackendState::Ready, false),
+                (BackendState::Blocked, false),
+            ] {
+                assert!(!(interface == BackendState::Ready && link_local));
+            }
+        }
+
+        #[test]
+        fn leader_exit_with_known_writer_never_publishes() {
+            let destination = tempfile::tempdir().unwrap();
+            let stage = ReceiveStaging::create(destination.path()).unwrap();
+            let path = std::fs::canonicalize(stage.path()).unwrap();
+            let mut writer = Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    r#"trap '' INT; printf writing > "$1/file"; while :; do sleep 1; done"#,
+                    "fixture",
+                    path.to_str().unwrap(),
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut leader = fixture_child("nonzero");
+            let (_, state, _) = supervise(
+                &mut leader,
+                &stage,
+                Instant::now() + Duration::from_secs(2),
+                &AtomicBool::new(false),
+                &AtomicBool::new(false),
+                &AtomicBool::new(false),
+            );
+            assert_eq!(state, ReceiveState::Failed);
+            assert!(writer.try_wait().unwrap().is_none());
+            assert_eq!(finish_staging(stage, false, false), (0, 0, "incomplete"));
+            assert!(path.exists());
+            // Owned Child kill/reap, never a numeric PGID from a reaped leader.
+            writer.kill().unwrap();
+            writer.wait().unwrap();
+            assert!(!destination.path().join("file").exists());
+        }
+
+        #[test]
         fn no_backend_can_start_without_writer_containment() {
             assert!(!writer_containment_available());
             for quiescent in [false, true] {
@@ -1171,7 +1316,7 @@ mod receive {
         fn unknown_writers_preserve_containment_and_never_publish() {
             let destination = tempfile::tempdir().unwrap();
             let stage = ReceiveStaging::create(destination.path()).unwrap();
-            let path = stage.path().to_owned();
+            let path = std::fs::canonicalize(stage.path()).unwrap();
             std::fs::write(path.join("partial"), b"unsafe").unwrap();
             assert_eq!(finish_staging(stage, false, false), (0, 0, "incomplete"));
             assert!(path.join("partial").exists());
