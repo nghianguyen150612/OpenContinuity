@@ -30,7 +30,7 @@ pub struct FinalizedReceive {
 
 pub struct ReceiveStaging {
     root: PathBuf,
-    destination: PathBuf,
+    destination: File,
     keep: bool,
 }
 
@@ -49,7 +49,9 @@ pub struct ReceiveSessionState {
 }
 
 impl ReceiveSessionState {
-    pub fn retain_until_quiescent(&mut self) { self.keep = true; }
+    pub fn retain_until_quiescent(&mut self) {
+        self.keep = true;
+    }
     pub fn create_runtime() -> io::Result<Self> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
             io::Error::new(
@@ -110,7 +112,9 @@ impl ReceiveSessionState {
 
 impl Drop for ReceiveSessionState {
     fn drop(&mut self) {
-        if !self.keep { let _ = fs::remove_dir_all(&self.root); }
+        if !self.keep {
+            let _ = fs::remove_dir_all(&self.root);
+        }
     }
 }
 
@@ -181,8 +185,12 @@ impl ReceiveLock {
 }
 
 impl ReceiveStaging {
-    pub fn retain_until_quiescent(&mut self) { self.keep = true; }
-    pub fn preserve(mut self) { self.keep = true; }
+    pub fn retain_until_quiescent(&mut self) {
+        self.keep = true;
+    }
+    pub fn preserve(mut self) {
+        self.keep = true;
+    }
     /// Canonicalize the operator-selected existing destination, then create a
     /// private staging directory on the same filesystem for atomic finalizing.
     pub fn create(destination: &Path) -> io::Result<Self> {
@@ -193,12 +201,17 @@ impl ReceiveStaging {
                 "destination is not a directory",
             ));
         }
+        let destination = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(destination)?;
+        let anchored = PathBuf::from(format!("/proc/self/fd/{}", destination.as_raw_fd()));
         for _ in 0..8 {
             let mut random = [0_u8; 16];
             getrandom::getrandom(&mut random)
                 .map_err(|error| io::Error::other(error.to_string()))?;
             let name = format!(".opencontinuity-airdrop-{}", hex_lower(&random));
-            let root = destination.join(name);
+            let root = anchored.join(name);
             let mut builder = fs::DirBuilder::new();
             #[cfg(unix)]
             builder.mode(0o700);
@@ -285,22 +298,33 @@ impl ReceiveStaging {
         // leaves our 0700 staging root as well.
         restrict_tree_permissions(&self.root)?;
 
-        let mut top_level = fs::read_dir(&self.root)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<io::Result<Vec<_>>>()?;
-        top_level.sort();
-        for path in top_level {
-            let name = path
+        // One rename publishes the entire validated tree, never a prefix.
+        let source = path_cstring(
+            self.root
                 .file_name()
-                .and_then(|value| value.to_str())
-                .ok_or_else(invalid_name)?;
-            if !safe_component(name) {
-                return Err(invalid_name());
+                .map(Path::new)
+                .ok_or_else(invalid_name)?,
+        )?;
+        for _ in 0..8 {
+            let mut random = [0_u8; 16];
+            getrandom::getrandom(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
+            let name = CString::new(format!("AirDrop Receive {}", hex_lower(&random)))
+                .map_err(|_| invalid_name())?;
+            match rename_bundle(&self.destination, &source, &name) {
+                Ok(()) => {
+                    self.keep = true;
+                    break;
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
             }
-            move_without_overwrite(&path, &self.destination, name)?;
         }
-        self.keep = true;
-        let _ = fs::remove_dir(&self.root);
+        if !self.keep {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "bundle collisions exhausted",
+            ));
+        }
         Ok(FinalizedReceive {
             files: usage.files,
             bytes: usage.bytes,
@@ -411,72 +435,23 @@ fn restrict_tree_permissions(path: &Path) -> io::Result<()> {
     }
 }
 
-fn move_without_overwrite(source: &Path, destination: &Path, name: &str) -> io::Result<()> {
-    for suffix in 0_u16..1000 {
-        let candidate = collision_name(name, suffix);
-        let from = path_cstring(source)?;
-        let to = path_cstring(&destination.join(candidate))?;
-        // SAFETY: both C strings are NUL-terminated, valid for this call, and
-        // RENAME_NOREPLACE asks the kernel to atomically reject collisions.
-        let result = unsafe {
-            libc::renameat2(
-                libc::AT_FDCWD,
-                from.as_ptr(),
-                libc::AT_FDCWD,
-                to.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::AlreadyExists {
-            return Err(error);
-        }
+fn rename_bundle(destination: &File, source: &CString, target: &CString) -> io::Result<()> {
+    // Both names are relative to the pinned destination descriptor. No parent
+    // path lookup occurs at publication and the target is never overwritten.
+    let result = unsafe {
+        libc::renameat2(
+            destination.as_raw_fd(),
+            source.as_ptr(),
+            destination.as_raw_fd(),
+            target.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "no unused destination name remains",
-    ))
-}
-
-fn collision_name(name: &str, suffix: u16) -> String {
-    if suffix == 0 {
-        return name.to_string();
-    }
-    let path = Path::new(name);
-    let suffix = format!(" ({suffix})");
-    match (
-        path.file_stem().and_then(|v| v.to_str()),
-        path.extension().and_then(|v| v.to_str()),
-    ) {
-        (Some(stem), Some(extension)) => {
-            let mut extension_budget = 255_usize.saturating_sub(suffix.len() + 1);
-            let mut stem_budget = extension_budget.saturating_sub(extension.len());
-            if extension.len() + suffix.len() + 1 >= 255 {
-                stem_budget = 0;
-                extension_budget = extension_budget.min(extension.len());
-            }
-            let stem = truncate_utf8(stem, stem_budget);
-            let extension = truncate_utf8(extension, extension_budget);
-            format!("{stem}{suffix}.{extension}")
-        }
-        (Some(stem), None) => {
-            format!("{}{suffix}", truncate_utf8(stem, 255 - suffix.len()))
-        }
-        _ => format!("received{suffix}"),
-    }
-}
-
-fn truncate_utf8(value: &str, maximum_bytes: usize) -> &str {
-    let end = value
-        .char_indices()
-        .take_while(|(index, character)| index + character.len_utf8() <= maximum_bytes)
-        .map(|(index, character)| index + character.len_utf8())
-        .last()
-        .unwrap_or(0);
-    &value[..end]
 }
 
 fn path_cstring(path: &Path) -> io::Result<CString> {
@@ -557,7 +532,10 @@ mod tests {
         #[cfg(not(unix))]
         let chosen = destination.clone();
         let staging = ReceiveStaging::create(&chosen).unwrap();
-        assert_eq!(staging.path().parent(), Some(destination.as_path()));
+        assert_eq!(
+            fs::canonicalize(staging.path().parent().unwrap()).unwrap(),
+            destination
+        );
         #[cfg(unix)]
         assert_eq!(
             fs::metadata(staging.path()).unwrap().permissions().mode() & 0o777,
@@ -624,10 +602,13 @@ mod tests {
             fs::read(destination.join("empty.txt")).unwrap(),
             b"existing"
         );
-        assert_eq!(fs::read(destination.join("empty (1).txt")).unwrap(), b"");
+        assert_eq!(
+            fs::read(bundle_path(&destination).join("empty.txt")).unwrap(),
+            b""
+        );
         #[cfg(unix)]
         assert_eq!(
-            fs::metadata(destination.join("empty (1).txt"))
+            fs::metadata(bundle_path(&destination).join("empty.txt"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -636,13 +617,71 @@ mod tests {
         );
     }
 
+    fn bundle_path(destination: &Path) -> PathBuf {
+        fs::read_dir(destination)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("AirDrop Receive ")
+            })
+            .unwrap()
+    }
+
     #[test]
-    fn collision_suffix_preserves_utf8_and_component_limit() {
-        let long = format!("{}.txt", "表".repeat(84));
-        let collided = collision_name(&long, 1);
-        assert!(collided.len() <= 255);
-        assert!(collided.ends_with(" (1).txt"));
-        assert!(collided.is_char_boundary(collided.len()));
+    fn atomic_bundle_nested_counts_and_permissions() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = ReceiveStaging::create(root.path()).unwrap();
+        fs::create_dir(stage.path().join("folder")).unwrap();
+        fs::write(stage.path().join("folder/表.txt"), b"abc").unwrap();
+        fs::write(stage.path().join("empty"), b"").unwrap();
+        let result = stage.finalize().unwrap();
+        assert_eq!((result.files, result.bytes), (2, 3));
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        let bundle = bundle_path(root.path());
+        assert_eq!(fs::metadata(&bundle).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::metadata(bundle.join("folder")).unwrap().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(bundle.join("folder/表.txt")).unwrap().mode() & 0o777,
+            0o600
+        );
+        assert!(safe_component(&"表".repeat(85)));
+        assert!(!safe_component(&"表".repeat(86)));
+    }
+
+    #[test]
+    fn collision_and_rename_failure_leave_source_unpublished() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = ReceiveStaging::create(root.path()).unwrap();
+        fs::write(stage.path().join("file"), b"content").unwrap();
+        let target = CString::new("AirDrop Receive collision").unwrap();
+        fs::create_dir(root.path().join(target.to_str().unwrap())).unwrap();
+        let source = path_cstring(Path::new(stage.root.file_name().unwrap())).unwrap();
+        assert_eq!(
+            rename_bundle(&stage.destination, &source, &target)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(stage.path().join("file").exists());
+        let invalid = CString::new("missing/target").unwrap();
+        assert!(rename_bundle(&stage.destination, &source, &invalid).is_err());
+        assert!(stage.path().join("file").exists());
+    }
+
+    #[test]
+    fn validation_failure_never_publishes_a_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = ReceiveStaging::create(root.path()).unwrap();
+        fs::write(stage.path().join("good"), b"good").unwrap();
+        fs::write(stage.path().join(".bad"), b"bad").unwrap();
+        assert!(stage.finalize().is_err());
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
     }
 
     #[test]
@@ -688,7 +727,7 @@ mod tests {
         let result = stage.finalize().unwrap();
         assert_eq!(result.files, 1);
         assert_eq!(
-            fs::read(destination.join("complete.txt")).unwrap(),
+            fs::read(bundle_path(&destination).join("complete.txt")).unwrap(),
             b"complete"
         );
         assert!(!partial.exists());
