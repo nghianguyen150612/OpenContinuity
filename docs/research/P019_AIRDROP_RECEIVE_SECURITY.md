@@ -34,7 +34,8 @@ The session has a 15–3600 second deadline. The direct child may be killed with
 not established. Escaped descendants cannot be accounted for, so publication
 is blocked. Unknown writers require retained staging and runtime state. Owly's generated
 TLS identity is placed under a unique private directory in `XDG_RUNTIME_DIR`
-and that directory is removed when the OpenContinuity process exits normally.
+and that directory is retained if writers cannot be proven stopped; it is
+removed only when safe.
 Abrupt power loss can leave runtime files until the OS clears the runtime
 directory; unlinking is not secure erasure.
 

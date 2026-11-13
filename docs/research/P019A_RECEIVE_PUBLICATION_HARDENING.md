@@ -109,3 +109,7 @@ Native Apple Watch Auto Unlock: NO-GO.
 Every report preserves `authorization: never_evaluated` and
 `physicalQualification: not_qualified`. Software tests do not establish
 native AirDrop compatibility or physical qualification.
+
+Final review also separated the staging-retention flag from successful
+publication: retaining an unknown-writer directory must never cause exhausted
+bundle-name collisions to be reported as successful publication.

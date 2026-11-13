@@ -306,6 +306,7 @@ impl ReceiveStaging {
                 .map(Path::new)
                 .ok_or_else(invalid_name)?,
         )?;
+        let mut published = false;
         for _ in 0..8 {
             let mut random = [0_u8; 16];
             getrandom::getrandom(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
@@ -313,6 +314,7 @@ impl ReceiveStaging {
                 .map_err(|_| invalid_name())?;
             match rename_bundle(&self.destination, &source, &name) {
                 Ok(()) => {
+                    published = true;
                     self.keep = true;
                     break;
                 }
@@ -320,7 +322,7 @@ impl ReceiveStaging {
                 Err(e) => return Err(e),
             }
         }
-        if !self.keep {
+        if !published {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "bundle collisions exhausted",

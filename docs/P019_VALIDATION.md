@@ -12,8 +12,8 @@ escalation are unsupported; no receive publication is enabled.
 P019A local validation: workspace tests passed 235 tests (95 CLI unit,
 25 BlueZ D-Bus, 15 CLI command, 3 discovery CLI, 1 inventory CLI,
 29 discovery D-Bus, 66 core, 1 daemon CLI); Python passed 55 tests.
-Formatting, Clippy with warnings denied, build and whitespace gates are
-rerun before delivery. Final-head hosted results are recorded with delivery
+Formatting, Clippy with warnings denied, workspace build and whitespace gates
+passed locally. Final-head hosted results are recorded with delivery
 evidence; older green workflows are not evidence for this recovery.
 Qt/QML, Swift/CryptoKit and watchOS gates are unchanged. Physical qualification
 remains not_qualified and authorization remains never_evaluated.
