@@ -6,11 +6,11 @@ OpenContinuity is an open-source effort to build native Apple ecosystem interope
 - **CLI:** `opencontinuity`
 - **Daemon:** `opencontinuityd`
 - **Core:** portable Rust 2024 contracts
-- **Planned GUI:** Qt 6/QML with a small C++ bridge
+- **Settings:** native Qt 6/QML with a small C++ bridge
 
 ## P001 status
 
-P001 is the project foundation. The CLI and idle foreground daemon are usable. No native Apple protocol has been implemented: Watch Auto Unlock, native AWDL/AirDrop, AirPods configuration and switching are all **unsupported in this build**. P008 adds a separate signed Watch approval research profile. P009 adds a separately versioned BlueZ/CoreBluetooth transport, bounded host request and Watch response transfers, and a Rust/Swift software fixture exchange. P009A adds a foreground test-only enrollment workflow with an ephemeral in-memory Watch key and manual verification of both public-key fingerprints. Physical BLE and LocalAuthentication validation remain unrun. This research profile is not Apple Auto Unlock and does not authorize Linux. The doctor command reports capabilities honestly and does not scan for devices. See [Feature Matrix](docs/FEATURE_MATRIX.md) and [Roadmap](docs/ROADMAP.md).
+The CLI and idle foreground daemon are usable. P019 adds an experimental optional Owly receiver process for an already-prepared AWDL interface; it does not implement an AWDL radio driver, activate Wi-Fi, guarantee iPhone discovery or establish genuine AirDrop interoperability. Apple Watch Auto Unlock and AirPods configuration remain unsupported. P008/P009 are separate signed Watch research protocols, not Apple Auto Unlock, and do not authorize Linux. Physical BLE, AirDrop and LocalAuthentication validation remain unrun. The static doctor does not scan, and `airdrop doctor` is read-only. See [Feature Matrix](docs/FEATURE_MATRIX.md) and [Roadmap](docs/ROADMAP.md).
 
 ## Build and run
 
@@ -21,6 +21,7 @@ cargo build --workspace
 cargo run -p opencontinuity-cli -- --help
 cargo run -p opencontinuity-cli -- doctor
 cargo run -p opencontinuity-cli -- doctor --json
+cargo run -p opencontinuity-cli -- airdrop doctor --json
 cargo run -p opencontinuity-cli -- devices list --json
 cargo run -p opencontinuity-cli -- research watch --fixture tests/fixtures/watch-discovery.json --json
 cargo run -p opencontinuity-cli -- research watch-endpoint --fixture tests/fixtures/watch-endpoint.json --json
@@ -31,7 +32,7 @@ cargo run -p opencontinuityd -- --help
 cargo run -p opencontinuityd
 ```
 
-The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. `research watch` and `research watch-endpoint` use only local fixtures and deterministic mocks. `research watch-auth` verifies signed test-only research fixtures without system side effects and always reports `authorization: never_evaluated`. `research watch-auth-transport prepare` and `verify-response` are test-only tools for the serialized Rust/Swift CI exchange; they do not start BLE or authorize Linux. On macOS, `OC_P008_INTEROP_OUTPUT=/tmp/watch-auth-response.json swift test --package-path experiments/watchos` creates a complete P008 test fixture; pass that path to the CLI to check both signatures. `research watch-ble --capabilities` remains read-only. `research watch-gatt serve` is a separate experimental synthetic GATT service. P009A adds `research watch-auth-gatt generate-host-key`, `export-host-pin` and `check-enrollment`; `serve` requires explicit `--experimental`, a selected adapter, a 1–60 second runtime, schema-2 test-only enrollments, a separate mode-0600 host key, and exact host/Watch SHA-256 confirmation flags. It signs a fresh 60-second P008 request only after BlueZ registration succeeds. Setup is bounded; request delivery, consent and response delivery have separate monotonic deadlines. The Watch app has an explicit Authenticated Research screen and keeps its ephemeral P-256 private key in memory. Physical signed BLE remains unverified. See [P009A deadline model](docs/research/P009A_DEADLINE_MODEL.md), [temporary enrollment](docs/research/P009A_TEMPORARY_ENROLLMENT.md), [security review](docs/research/P009A_SECURITY_REVIEW.md), and [validation](docs/P009A_VALIDATION.md).
+The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. Research fixture commands are offline and always report `authorization: never_evaluated`. The Watch GATT and signed transport remain separate experimental flows; physical signed BLE remains unverified. For P019, `airdrop doctor --json` only reads local state. The optional receive command requires an already-prepared `awdl0`, explicit operator flags, an existing destination, and a terminal prompt for each incoming request. It does not bring up Owly's radio or auto-accept. See the [P019 scope](docs/research/P019_AIRDROP_AWDL_FOUNDATION_SCOPE.md), [upstream/license audit](docs/research/P019_UPSTREAM_AND_LICENSE_AUDIT.md), [receive security review](docs/research/P019_AIRDROP_RECEIVE_SECURITY.md), [RTL8852BE physical plan](docs/research/P019_RTL8852BE_PHYSICAL_QUALIFICATION.md), and [validation](docs/P019_VALIDATION.md).
 
 ## Architecture
 

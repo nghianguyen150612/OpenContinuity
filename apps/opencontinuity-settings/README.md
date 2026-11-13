@@ -21,6 +21,14 @@ smoke tests instead. CLI lookup defaults to `opencontinuity` in the Settings
 executable's own directory, never the current directory or PATH. `--cli` accepts
 one trusted absolute executable path; it receives only fixed `doctor --json` or
 `devices list --json`, or explicit `devices discover --seconds 10 --events-jsonl` arguments.
+AirDrop status is also manual and read-only: the AirDrop page invokes only
+`airdrop doctor --json`, with a bounded asynchronous process and strict
+schema-v1 validation. Navigating to the page does not refresh status, scan for
+Apple devices, or activate a radio. The Settings Receive control is disabled;
+the experimental terminal receive path requires an already-prepared AWDL
+interface, local terminal consent, and Owly's separate per-request prompt.
+A status report showing Owly and `awdl0` ready does not establish an AirDrop
+advertisement or iPhone interoperability.
 A missing CLI still leaves every page navigable with an explanatory error.
 Doctor refresh is manual (Ctrl+R), asynchronous, limited to three seconds, and never
 performs Bluetooth discovery. Device snapshots are refreshed only by the
@@ -39,14 +47,15 @@ No services, authentication settings or compositor configuration are installed.
 
 See [build and troubleshooting](../../docs/research/P011_DESKTOP_BUILD_AND_TEST.md)
 for Arch/Hyprland, Ubuntu, Wayland/X11 plugins and manual checks. Native Watch
-Auto Unlock, AirDrop and AirPods protocols are unsupported. Device discovery is
+Auto Unlock and AirPods protocols are unsupported. AirDrop is experimental and
+its live interoperability remains unverified. Device discovery is
 explicit and bounded as described below. P007–P010 research is informational only;
 `authorization: never_evaluated`. P010 hardware qualification remains NO-GO.
 
 The known-device section lists BlueZ's already-known objects and says explicitly that
 no Bluetooth scan was performed by that inventory request. Empty, unavailable, denied and stale outcomes are
 distinct. BlueZ `Trusted` does not authenticate an Apple device. No connect,
-pair, forget, AirDrop, AirPods or Watch unlock controls are provided. See the
+pair, forget, initiate a Settings AirDrop receive, AirPods, or Watch unlock controls are provided. See the
 [P012 schema](../../docs/research/P012_DEVICE_SNAPSHOT_SCHEMA.md),
 [UI design](../../docs/research/P012_SETTINGS_DEVICES_UI.md), and
 [validation](../../docs/P012_VALIDATION.md).

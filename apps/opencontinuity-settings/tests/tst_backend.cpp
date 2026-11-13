@@ -270,7 +270,7 @@ private slots:
     DoctorProvider p({cli});
     p.refresh();
     QTRY_COMPARE(p.reportState(), "loaded");
-    QCOMPARE(p.capability("airdrop")["state"].toString(), "unsupported");
+    QCOMPARE(p.capability("airdrop")["state"].toString(), "experimental");
     QCOMPARE(p.trustStages()
                  ->data(p.trustStages()->index(0), StatusModel::State)
                  .toString(),

@@ -1,4 +1,5 @@
 #include "DoctorProvider.h"
+#include "AirdropStatusProvider.h"
 #include "DeviceInventoryProvider.h"
 #include "DeviceDiscoveryProvider.h"
 #include <QCommandLineParser>
@@ -31,6 +32,7 @@ int main(int argc, char **argv) {
                                  : QDir(QCoreApplication::applicationDirPath())
                                        .filePath("opencontinuity");
   DoctorProvider backend({executable});
+  AirdropStatusProvider airdropStatus({executable});
   DeviceInventoryProvider inventory({executable});
   DeviceDiscoveryProvider discovery({executable});
   qmlRegisterUncreatableType<StatusModel>(
@@ -38,6 +40,9 @@ int main(int argc, char **argv) {
   qmlRegisterUncreatableType<DoctorProvider>("OpenContinuity.Backend", 1, 0,
                                              "DoctorProvider",
                                              "Owned by the application");
+  qmlRegisterUncreatableType<AirdropStatusProvider>(
+      "OpenContinuity.Backend", 1, 0, "AirdropStatusProvider",
+      "Owned by the application");
   qmlRegisterUncreatableType<DeviceInventoryModel>("OpenContinuity.Backend", 1, 0,
                                                    "DeviceInventoryModel", "Owned by DeviceInventoryProvider");
   qmlRegisterUncreatableType<DeviceInventoryProvider>("OpenContinuity.Backend", 1, 0,
@@ -46,6 +51,7 @@ int main(int argc, char **argv) {
   qmlRegisterUncreatableType<DeviceDiscoveryProvider>("OpenContinuity.Backend", 1, 0, "DeviceDiscoveryProvider", "Owned by the application");
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("doctor", &backend);
+  engine.rootContext()->setContextProperty("airdropStatus", &airdropStatus);
   engine.rootContext()->setContextProperty("deviceInventory", &inventory);
   engine.rootContext()->setContextProperty("deviceDiscovery", &discovery);
   engine.load(QUrl("qrc:/qml/Main.qml"));
@@ -54,6 +60,8 @@ int main(int argc, char **argv) {
   QTimer::singleShot(0, &backend, &DoctorProvider::refresh);
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &backend,
                    &DoctorProvider::cancel);
+  QObject::connect(&app, &QCoreApplication::aboutToQuit, &airdropStatus,
+                   &AirdropStatusProvider::cancel);
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &inventory,
                    &DeviceInventoryProvider::cancel);
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &discovery, &DeviceDiscoveryProvider::shutdown);

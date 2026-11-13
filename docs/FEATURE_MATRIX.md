@@ -6,6 +6,8 @@ States include the P011 provisional Settings foundation; earlier research rows r
 | --- | --- | --- |
 | Rust portable capability and trust contracts | supported | Implemented and unit-tested in `opencontinuity-core`; this is a project contract, not Apple protocol support. |
 | CLI help, version, doctor | supported | Implemented and tested; doctor remains static and performs no host scan. |
+| AirDrop backend doctor | experimental | `airdrop doctor --json` performs bounded read-only local radio probes and can invoke exact-version Owly doctor; it never starts discovery or changes radio state. Status is not RF qualification. |
+| AirDrop receive process integration | experimental / gated | Explicit terminal-only Owly 0.4.2 supervision with a pre-prepared `awdl0`, private staging and no-overwrite finalization. Settings Receive remains disabled; live iPhone interoperability is NOT RUN and upstream CLI lacks strict configurable aggregate limits. |
 | Read-only protocol research fixture report | supported | `opencontinuity research watch --fixture <path> [--json]` validates sanitized offline metadata through a deterministic mock. No Bluetooth access, pairing, authentication, or authorization. |
 | Watch endpoint research simulation | supported | `opencontinuity research watch-endpoint --fixture <path> [--json]` runs deterministic Ed25519 mock challenge-response with bounded/versioned messages. Simulation only; report says so and authorization is always `never_evaluated`. |
 | BlueZ capability discovery | experimental | `opencontinuity research watch-ble --capabilities [--json]` remains read-only. Runtime manager interface absence is unsupported, D-Bus denial is blocked, missing evidence is unknown, and controller radio capability is not tested. |
@@ -24,7 +26,7 @@ States include the P011 provisional Settings foundation; earlier research rows r
 | watchOS foreground research client | experimental source | SwiftUI/CoreBluetooth app and pure wire codec source exist under `experiments/watchos/`; no Apple compilation, signing, simulator, or physical Watch test is claimed. |
 | Foreground daemon lifecycle | supported | Safe idle process; nonprivileged and no integrations. |
 | Apple Watch SE 2 Auto Unlock, native protocol | unsupported | P002 research found public third-party enrollment/STS support blocked. Trust stages are unknown; no OS unlock behavior. |
-| AirDrop via native AWDL | unsupported | No AWDL or AirDrop implementation. |
+| OpenContinuity-native AWDL driver and AirDrop protocol implementation | unsupported | P019 uses an optional external Owly CLI when manually prepared; it does not implement an in-process AWDL driver, BLE wake, sender, Contacts Only identity, or native Apple authentication. |
 | AirPods Pro 3 AAP/AACP and Settings | unsupported | No device protocol implementation. P011 offers only a truthful status page, not AirPods settings operations. |
 | AirPods automatic switching | unsupported | Not implemented. |
 | AirPlay, HomeKit, iCloud, remaining Continuity | unsupported | Not implemented. |
