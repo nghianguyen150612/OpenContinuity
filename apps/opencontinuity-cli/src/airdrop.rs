@@ -458,6 +458,7 @@ mod receive {
         BackendExited,
         OutputLimitExceeded,
         Failed,
+        WriterContainmentUnavailable,
     }
 
     #[derive(Serialize)]
@@ -587,6 +588,15 @@ mod receive {
                 ReceiveState::Failed,
             );
         }
+        // No delegated cgroup or descendant-confining sandbox is owned here.
+        // setsid/PGID and pidfds alone cannot rule out escaped writers.
+        if !writer_containment_available() {
+            return print_blocked(
+                BlockReason::BackendFailed,
+                EndReason::WriterContainmentUnavailable,
+                ReceiveState::Failed,
+            );
+        }
         let mut staging = match ReceiveStaging::create(&options.destination) {
             Ok(staging) => staging,
             Err(_) => {
@@ -683,8 +693,8 @@ mod receive {
                 Ok(id) => signal_ids.push(id),
                 Err(_) => {
                     terminate_child(&mut child, Duration::from_secs(2));
-                    let _ = stdout_relay.join();
-                    let _ = stderr_relay.join();
+                    let _ = join_relay(stdout_relay);
+                    let _ = join_relay(stderr_relay);
                     return print_blocked(
                         BlockReason::BackendFailed,
                         EndReason::Failed,
@@ -703,8 +713,8 @@ mod receive {
             &output_exceeded,
             &output_failed,
         );
-        let stdout_ok = stdout_relay.join().is_ok_and(|result| result.is_ok());
-        let stderr_ok = stderr_relay.join().is_ok_and(|result| result.is_ok());
+        let stdout_ok = join_relay(stdout_relay);
+        let stderr_ok = join_relay(stderr_relay);
         if !stdout_ok || !stderr_ok {
             output_failed.store(true, Ordering::Relaxed);
         }
@@ -735,7 +745,7 @@ mod receive {
             EndReason::Cancelled => Some(BlockReason::Cancelled),
             EndReason::Expired => Some(BlockReason::SessionExpired),
             EndReason::OutputLimitExceeded => Some(BlockReason::OutputLimitExceeded),
-            EndReason::Failed => Some(BlockReason::BackendFailed),
+            EndReason::Failed | EndReason::WriterContainmentUnavailable => Some(BlockReason::BackendFailed),
             EndReason::BackendExited if cleanup != "complete" => Some(BlockReason::BackendFailed),
             EndReason::BackendExited => None,
         };
@@ -897,25 +907,38 @@ mod receive {
         }
     }
 
+    fn writer_containment_available() -> bool {
+        // Deliberately fail closed on every host; do not probe or modify host
+        // cgroups, infer confinement from /proc, or silently require root.
+        false
+    }
+
     fn terminate_child(child: &mut std::process::Child, grace: Duration) -> bool {
-        // Owly handles SIGINT by closing its server and mDNS registration. It
-        // runs in a new process group so a future helper cannot outlive us.
-        let pid = child.id() as libc::pid_t;
-        // SAFETY: the negative pid targets only the process group created for
-        // this child by `install_child_limits`.
-        let _ = unsafe { libc::kill(-pid, libc::SIGINT) };
+        // Child::kill targets only our unreaped direct child. Never signal a
+        // recycled PGID after leader reaping. This does NOT establish writer
+        // quiescence, so the receive activation gate remains closed.
+        let _ = child.kill();
         let deadline = Instant::now() + grace;
         loop {
-            if let Ok(Some(status)) = child.try_wait() {
-                return status.success();
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Err(_) => return false,
+                Ok(None) => {}
             }
-            if Instant::now() >= deadline {
-                let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
-                let _ = child.kill();
-                return child.wait().is_ok_and(|status| status.success());
-            }
+            if Instant::now() >= deadline { return false; }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    fn join_relay(
+        relay: std::thread::JoinHandle<io::Result<()>>,
+    ) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !relay.is_finished() {
+            if Instant::now() >= deadline { return false; }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        relay.join().is_ok_and(|result| result.is_ok())
     }
 
     fn spawn_terminal_relay<R: io::Read + Send + 'static>(
@@ -1040,6 +1063,16 @@ mod receive {
             let mut unknown = args.to_vec();
             unknown.push("--activate-radio".into());
             assert!(Options::parse(&unknown).is_err());
+        }
+
+        #[test]
+        fn no_backend_can_start_without_writer_containment() {
+            assert!(!writer_containment_available());
+            for quiescent in [false, true] {
+                let flag = AtomicBool::new(false);
+                assert_eq!(publication_eligible(EndReason::BackendExited, ReceiveState::Completed,
+                    BackendState::Available, &flag, &flag, &flag, quiescent), quiescent);
+            }
         }
 
         #[test]
