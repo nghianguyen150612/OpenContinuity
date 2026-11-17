@@ -12,6 +12,9 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+#[path = "airdrop_containment.rs"]
+mod containment;
 #[path = "airdrop_process.rs"]
 mod process;
 #[cfg(target_os = "linux")]
@@ -674,8 +677,9 @@ mod receive {
                 ReceiveState::Failed,
             );
         }
-        // No delegated cgroup or descendant-confining sandbox is owned here.
-        // setsid/PGID and pidfds alone cannot rule out escaped writers.
+        // P019C's cgroup foundation is not wired into this supervisor.
+        // Keep Receive blocked until the complete lifecycle and every other
+        // publication condition are integrated and qualified.
         if !writer_containment_available() {
             return print_blocked(
                 BlockReason::BackendFailed,

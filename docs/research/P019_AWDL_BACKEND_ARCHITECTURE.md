@@ -103,3 +103,12 @@ boundary for compromised code. A supported implementation requires an
 exclusive delegated cgroup subtree, placement before exec, recursive kernel
 population observation, subtree kill and bounded empty confirmation. See
 [P019B process containment](P019B_PROCESS_CONTAINMENT.md).
+
+## P019C foundation update
+
+The Linux CLI contains a separate cgroup v2 foundation for a future explicitly
+delegated subtree. It places a child before exec and observes/kills the entire
+delegation because members may migrate within it. The current host lacks
+delegation; the real-kernel test was not run, and the receive availability gate
+remains false. See
+[P019C cgroup foundation](P019C_CGROUP_CONTAINMENT_FOUNDATION.md).

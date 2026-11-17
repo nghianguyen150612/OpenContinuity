@@ -122,3 +122,11 @@ process path. The available host has no writable delegated subtree or running
 systemd manager. Receive remains fail-closed before Owly starts. The assessment
 does not claim that process-group checks or the pinned source inventory prove
 containment against compromised code.
+
+## P019C foundation update
+
+P019C adds an isolated Linux cgroup v2 foundation with explicit delegated-root
+preflight, pre-exec child placement, recursive population checks and bounded
+subtree kill. It remains disconnected from Receive. The unconditional false
+gate is preserved, and mocked lifecycle success cannot authorize publication.
+See [P019C cgroup foundation](P019C_CGROUP_CONTAINMENT_FOUNDATION.md).

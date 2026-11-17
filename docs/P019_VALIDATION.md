@@ -113,3 +113,27 @@ RUN/BLOCKED and NO-GO. Native Apple Watch Auto Unlock: NO-GO.
 Every software report keeps `authorization: never_evaluated` and
 `physicalQualification: not_qualified`. No hosted test may promote physical
 qualification.
+
+## P019C cgroup foundation
+
+P019C adds a Linux-only, testable cgroup v2 foundation, but keeps the
+production Receive capability gate unconditionally false. The component is not
+connected to Owly launch or publication. It requires an explicit exclusive
+delegated subtree, verifies the parent migration boundary, places children
+before exec, observes recursive delegated-root population, and uses bounded
+`cgroup.kill`/empty checks. It does not recover a populated subtree after the
+supervisor crashes; an external watchdog/service manager remains required.
+Mock controllers test application policy; they do not prove kernel containment.
+
+Final local gates passed: formatting, Clippy with warnings denied, workspace
+build, whitespace check, **248 Rust tests passed / 1 ignored**, and **55 Python
+tests passed**. The 13 new containment unit tests passed. The ignored test is
+the opt-in real-kernel cgroup integration; it was not run. Qt 6.4.2/QML
+and Swift/CryptoKit/watchOS remain required hosted CI gates. Only workflows
+tied to the exact final SHA count as validation; the historical P019B green
+runs do not validate P019C.
+
+The current Debian 13 / kernel 6.18.57 host has no writable delegation and no
+systemd manager. The opt-in cgroup integration test was NOT RUN. The aggregate
+disk quota remains unresolved and blocks Receive. See
+[the P019C foundation report](research/P019C_CGROUP_CONTAINMENT_FOUNDATION.md).

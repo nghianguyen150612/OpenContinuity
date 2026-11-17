@@ -108,3 +108,13 @@ supervisor that verifies recursive emptiness. See
 [P019B process containment](P019B_PROCESS_CONTAINMENT.md). Process groups,
 pidfds, and inspection of Owly's current lack of subprocess launches do not
 establish containment against compromised same-UID code.
+
+## P019C containment foundation
+
+An isolated cgroup v2 component now models an explicitly delegated exclusive
+subtree and monitors its recursive population so intra-subtree migration
+remains visible. It has not been integrated into the receive supervisor. The
+false availability gate and publication eligibility checks remain unchanged;
+the real-kernel integration test is NOT RUN on this host. Hard aggregate disk
+quota is still an independent blocker. See
+[P019C foundation](P019C_CGROUP_CONTAINMENT_FOUNDATION.md).

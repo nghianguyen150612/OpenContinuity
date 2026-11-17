@@ -118,11 +118,10 @@ unresolved. Qt Receive stays disabled.
 
 This environment cannot run a real delegated-cgroup integration test because
 no delegated subtree exists. P019A's deterministic software tests cover the
-fail-closed gate, known-writer publication blocking, and related receive
-supervisor helpers; they do not exercise kernel cgroup kill/population behavior.
-No fake cgroup filesystem is presented as proof of kernel semantics. A future
-implementation must add fake control-file tests and an opt-in integration test
-that runs only inside a separately prepared, exclusive delegated subtree.
+fail-closed gate and known-writer publication blocking. P019C adds fake
+controller state tests plus an ignored opt-in integration test, but neither
+mock tests nor source tests exercise kernel semantics unless that integration
+test runs inside a separately prepared, exclusive delegated subtree.
 
 No physical radio or Apple-device behavior is tested here. All reports retain
 `authorization: never_evaluated` and `physicalQualification: not_qualified`.
@@ -142,3 +141,11 @@ remains NOT RUN/BLOCKED; native Apple Auto Unlock remains NO-GO.
   `crates/owly-cli/src/airdrop.rs`,
   `crates/owly-airdrop/src/driver/receiver.rs`, and
   `crates/owly-airdrop/src/driver/staging.rs`.
+
+
+## P019C follow-up
+
+P019C adds an isolated cgroup v2 foundation and fake controller-state tests,
+while retaining the false Receive gate. It does not change the P019B host
+finding or claim the ignored real-kernel integration was run. See
+[P019C foundation](P019C_CGROUP_CONTAINMENT_FOUNDATION.md).

@@ -201,3 +201,12 @@ reaping, pidfds, and source inspection do not prove descendant containment.
 See [P019B process containment](research/P019B_PROCESS_CONTAINMENT.md) for
 host evidence, the delegated-subtree requirements and escape limits. The
 aggregate staging scanner remains approximate and supplies no hard disk quota.
+
+## P019C cgroup foundation
+
+The cgroup v2 code is isolated from Receive activation. The false writer
+containment gate remains mandatory. The foundation requires an explicit
+exclusive delegated subtree, inaccessible parent migration control, pre-exec
+placement, recursive population checks, and bounded subtree kill. Fake
+controller tests establish only application-state behavior. No real delegated
+kernel test has run here; aggregate disk quotas remain unimplemented.
