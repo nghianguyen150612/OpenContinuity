@@ -1,20 +1,18 @@
 # P019 validation
 
-## P019A recovery
+## P019B containment assessment
 
-The historical results below do not validate P019A. See
+The historical results below do not validate P019B. See
 [receive publication hardening](research/P019A_RECEIVE_PUBLICATION_HARDENING.md).
 Receive now reports writer_containment_unavailable before backend startup.
 Atomic bundle storage and strict pinned doctor parsing have deterministic
 software regressions. Descendant containment and graceful process-group
 escalation are unsupported; no receive publication is enabled.
 
-P019A local validation: workspace tests passed 235 tests (95 CLI unit,
-25 BlueZ D-Bus, 15 CLI command, 3 discovery CLI, 1 inventory CLI,
-29 discovery D-Bus, 66 core, 1 daemon CLI); Python passed 55 tests.
-Formatting, Clippy with warnings denied, workspace build and whitespace gates
-passed locally. Final-head hosted results are recorded with delivery
-evidence; older green workflows are not evidence for this recovery.
+P019A baseline was 235 Rust tests and 55 Python tests. P019B adds an
+evidence-backed containment assessment; it does not add a cgroup implementation
+because the current unprivileged host has no delegation. Current run results are
+recorded after validation below; these do not imply real-kernel cgroup tests.
 Qt/QML, Swift/CryptoKit and watchOS gates are unchanged. Physical qualification
 remains not_qualified and authorization remains never_evaluated.
 
@@ -24,6 +22,31 @@ state separately from physical qualification. The local and hosted results
 below are tied to implementation commit
 `939d4978d0fa33b9dfc8e27f382be646fa92f501`; the validation-record commit is
 documentation-only.
+
+## P019B environment and decision
+
+On Debian 13, kernel 6.18.57, cgroup v2 is mounted at /sys/fs/cgroup, but the
+process is in visible cgroup root `0::/`. That root and cgroup control files
+are root-owned and not writable by uid 1000. PID 1 is tail, not systemd;
+systemctl --user has no bus and XDG_RUNTIME_DIR is unset. No real cgroup
+integration test can be run without an externally delegated subtree. The
+receive gate remains writer_containment_unavailable. Details and primary
+references are in [P019B process containment](research/P019B_PROCESS_CONTAINMENT.md).
+
+The pinned Owly source launches no separate OS child in the receive path, but
+threads/tasks and this source inspection are not an enforceable boundary.
+Cgroup migration, user-manager access, disk quota and physical qualification
+limitations remain explicit. No host cgroup or service was modified.
+
+P019B validation on this host: `cargo fmt --all -- --check` PASS;
+`cargo clippy --workspace --all-targets -- -D warnings` PASS;
+`cargo test --workspace --all-targets` PASS, 235 tests;
+`cargo build --workspace` PASS; Python unittest discovery PASS, 55 tests;
+`git diff --check` PASS. The process-containment regression cases are the
+existing fail-closed/software-fixture tests (including known-writer publication
+blocking); no kernel cgroup lifecycle case ran because delegation is absent.
+Qt 6.4.2/QML, Swift/CryptoKit/watchOS remain hosted CI gates.
+
 
 ## Implemented paths
 

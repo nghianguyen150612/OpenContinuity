@@ -190,3 +190,14 @@ are removed on normal exit but are not securely erased. Receiver availability
 and software fixtures cannot prove AirDrop discovery, Apple identity, RF
 transfer or physical compatibility. Native Watch Auto Unlock remains NO-GO
 and all authorization remains `never_evaluated`.
+
+
+## P019B process containment
+
+P019 receive remains blocked before backend launch unless writer quiescence can
+be independently verified. The current Codex Cloud host exposes cgroup v2 but
+no writable delegated subtree or systemd manager. Process groups, leader
+reaping, pidfds, and source inspection do not prove descendant containment.
+See [P019B process containment](research/P019B_PROCESS_CONTAINMENT.md) for
+host evidence, the delegated-subtree requirements and escape limits. The
+aggregate staging scanner remains approximate and supplies no hard disk quota.

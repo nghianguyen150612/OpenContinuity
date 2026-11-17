@@ -93,3 +93,13 @@ a descriptor-relative no-replace directory rename, only after validation and
 independently verified writer quiescence. No such quiescence provider is enabled.
 Failed sessions never publish. Unknown writers retain containment rather than
 triggering unsafe deletion. Atomic visibility is not crash durability.
+
+## P019B containment assessment
+
+The current host cannot create a delegated cgroup or contact a systemd user
+manager, so the receive gate stays closed. Owly 0.4.2's inspected receive path
+uses tasks and threads but launches no OS child; this is not a security
+boundary for compromised code. A supported implementation requires an
+exclusive delegated cgroup subtree, placement before exec, recursive kernel
+population observation, subtree kill and bounded empty confirmation. See
+[P019B process containment](P019B_PROCESS_CONTAINMENT.md).

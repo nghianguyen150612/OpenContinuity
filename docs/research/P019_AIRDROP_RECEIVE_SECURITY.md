@@ -97,3 +97,14 @@ The earlier finalize path published after failed sessions. This is fixed with
 explicit eligibility checks and a fail-closed writer-containment gate. See
 [P019A hardening](P019A_RECEIVE_PUBLICATION_HARDENING.md) for the current
 blocked receive behavior, JSON counts, retained-state policy and limitations.
+
+## P019B containment decision
+
+The current runtime has cgroup v2 mounted but no delegated writable subtree;
+systemd and its user bus are unavailable. Receive remains blocked before
+backend launch. A future supported deployment needs an exclusive delegated
+subtree with an inaccessible parent migration boundary and an external
+supervisor that verifies recursive emptiness. See
+[P019B process containment](P019B_PROCESS_CONTAINMENT.md). Process groups,
+pidfds, and inspection of Owly's current lack of subprocess launches do not
+establish containment against compromised same-UID code.

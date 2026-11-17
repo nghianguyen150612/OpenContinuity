@@ -113,3 +113,12 @@ native AirDrop compatibility or physical qualification.
 Final review also separated the staging-retention flag from successful
 publication: retaining an unknown-writer directory must never cause exhausted
 bundle-name collisions to be reported as successful publication.
+
+## P019B containment reassessment
+
+[P019B process containment assessment](P019B_PROCESS_CONTAINMENT.md) inspected
+cgroup v2 delegation, systemd transient scopes, and the pinned Owly receive
+process path. The available host has no writable delegated subtree or running
+systemd manager. Receive remains fail-closed before Owly starts. The assessment
+does not claim that process-group checks or the pinned source inventory prove
+containment against compromised code.
