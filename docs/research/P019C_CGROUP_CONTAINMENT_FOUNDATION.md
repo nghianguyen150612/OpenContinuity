@@ -172,3 +172,14 @@ Always preserve `authorization: never_evaluated` and
 `physicalQualification: not_qualified`. RTL8852BE AWDL and iPhone 13
 AirDrop remain NOT RUN; Watch SE 2 W0–W6 remains NOT RUN/BLOCKED, and native
 Apple Auto Unlock remains NO-GO.
+
+## P019D follow-up
+
+P019D connects this foundation to the internal Receive coordinator while
+preserving the disabled production gate. It also corrects the placement
+assumption above. Migration checks apply at the common ancestor, which may
+be higher than the parent. With all visible ancestors protected, an ordinary
+same-UID child outside the delegation cannot write itself into the subtree.
+The ignored kernel test now checks that rejection. Positive placement and
+descendant lifecycle tests require a trusted external launcher. See
+[P019D lifecycle and crash supervision](P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).

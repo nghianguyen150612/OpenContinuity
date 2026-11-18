@@ -117,8 +117,8 @@ impl DelegatedSubtree {
                 return Err(ContainmentError::InvalidDelegation);
             }
         }
-        verify_supervisor_outside(&root)?;
-        verify_parent_is_migration_boundary(root.as_raw_fd())?;
+        let hierarchy_root = verify_supervisor_outside(&root)?;
+        verify_migration_boundary(&root, &hierarchy_root)?;
         let effective_uid = unsafe { libc::geteuid() };
         verify_writable_control(root.as_raw_fd(), "cgroup.procs", effective_uid)?;
         verify_writable_control(root.as_raw_fd(), "cgroup.kill", effective_uid)?;
@@ -308,7 +308,7 @@ impl CgroupSession {
     /// Install a pre-exec hook that moves the forked child into the session
     /// before exec. If writing "0" fails, spawn returns an error and the
     /// backend executable is never entered.
-    pub fn place_before_exec(&self, command: &mut Command) {
+    fn place_before_exec(&self, command: &mut Command) {
         let fd = self.procs.as_raw_fd();
         // SAFETY: this child-only hook uses write(2) on a pinned cgroup.procs
         // descriptor. The descriptor remains open until exec; no shell is used.
@@ -317,8 +317,8 @@ impl CgroupSession {
         }
     }
 
-    pub fn spawn(&self, command: &mut Command) -> io::Result<Child> {
-        self.place_before_exec(command);
+    pub fn spawn(&self, mut command: Command) -> io::Result<Child> {
+        self.place_before_exec(&mut command);
         command.spawn()
     }
 
@@ -507,20 +507,29 @@ fn verify_readable_control(
     Ok(())
 }
 
-fn verify_parent_is_migration_boundary(parent: libc::c_int) -> Result<(), ContainmentError> {
-    let dotdot = CString::new("..").unwrap();
-    let fd = unsafe {
-        libc::openat(
-            parent,
-            dotdot.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        )
-    };
-    if fd < 0 {
-        return Err(ContainmentError::InvalidDelegation);
+fn verify_migration_boundary(root: &File, hierarchy_root: &File) -> Result<(), ContainmentError> {
+    let invalid = |_| ContainmentError::InvalidDelegation;
+    let dotdot = CString::new("..").expect("static path component");
+    let mut cursor = root.try_clone().map_err(invalid)?;
+    for _ in 0..1024 {
+        if same_directory(&cursor, hierarchy_root).map_err(invalid)? {
+            return Err(ContainmentError::InvalidDelegation);
+        }
+        let parent = openat_dir(cursor.as_raw_fd(), &dotdot).map_err(invalid)?;
+        if !is_cgroup2(parent.as_raw_fd()) || same_directory(&cursor, &parent).map_err(invalid)? {
+            return Err(ContainmentError::InvalidDelegation);
+        }
+        verify_parent_control_is_inaccessible(openat_control(
+            parent.as_raw_fd(),
+            "cgroup.procs",
+            true,
+        ))?;
+        if same_directory(&parent, hierarchy_root).map_err(invalid)? {
+            return Ok(());
+        }
+        cursor = parent;
     }
-    let fd = unsafe { File::from_raw_fd(fd) };
-    verify_parent_control_is_inaccessible(openat_control(fd.as_raw_fd(), "cgroup.procs", true))
+    Err(ContainmentError::InvalidDelegation)
 }
 
 fn owner_and_mode_are_safe(owner: u32, mode: u32, effective_uid: u32) -> bool {
@@ -611,7 +620,7 @@ fn configured_root(value: Option<OsString>) -> Result<PathBuf, ContainmentError>
         .ok_or(ContainmentError::Unsupported)
 }
 
-fn verify_supervisor_outside(delegation: &File) -> Result<(), ContainmentError> {
+fn verify_supervisor_outside(delegation: &File) -> Result<File, ContainmentError> {
     let cgroup_membership =
         fs::read_to_string("/proc/self/cgroup").map_err(|_| ContainmentError::Unsupported)?;
     let current = cgroup_membership
@@ -622,7 +631,9 @@ fn verify_supervisor_outside(delegation: &File) -> Result<(), ContainmentError> 
         fs::read_to_string("/proc/self/mountinfo").map_err(|_| ContainmentError::Unsupported)?;
     let current = Path::new(current);
     for (mount_root, mount_point) in mountinfo.lines().filter_map(parse_cgroup2_mount) {
-        if !current.starts_with(&mount_root) {
+        // A bind-mounted subtree hides ancestors needed to establish the
+        // migration boundary. Require a full hierarchy view.
+        if mount_root != Path::new("/") || !current.starts_with(&mount_root) {
             continue;
         }
         let relative = current
@@ -636,7 +647,7 @@ fn verify_supervisor_outside(delegation: &File) -> Result<(), ContainmentError> 
         {
             return Err(ContainmentError::InvalidDelegation);
         }
-        return Ok(());
+        return Ok(mount_dir);
     }
     Err(ContainmentError::Unsupported)
 }
@@ -652,8 +663,8 @@ fn is_same_or_descendant(delegation: &File, current: &File, mount_root: &File) -
             return Ok(false);
         }
         let parent = openat_dir(cursor.as_raw_fd(), &parent_name)?;
-        if same_directory(&parent, &cursor)? {
-            return Ok(false);
+        if !is_cgroup2(parent.as_raw_fd()) || same_directory(&parent, &cursor)? {
+            return Err(io::Error::other("cannot verify hierarchy ancestry"));
         }
         cursor = parent;
     }
@@ -744,9 +755,50 @@ pub fn writers_quiescent(outcome: SessionOutcome) -> bool {
     matches!(outcome, SessionOutcome::QuiescentSuccess)
 }
 
-/// State machine policy: success requires direct-child success and empty
-/// recursive population. Cancellation/deadline kill the owned subtree and
-/// wait boundedly. No uncertain state returns Clean.
+/// Observe the whole delegation and stop it if execution failed or a writer
+/// survived. The caller retains the session and lease through relay/reap checks.
+pub fn quiesce<C: Controller>(
+    controller: &mut C,
+    session: &C::Session,
+    normal_exit: bool,
+    timeout: Duration,
+) -> Result<bool, ContainmentError> {
+    let populated = match controller.populated(session) {
+        Ok(value) => value,
+        Err(error) => {
+            // A read failure does not make a potentially active tree safe.
+            // Attempt a bounded stop, but retain the uncertain outcome.
+            let _ = stop_tree(controller, session, timeout);
+            return Err(error);
+        }
+    };
+    if !normal_exit || populated {
+        stop_tree(controller, session, timeout)?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn stop_tree<C: Controller>(
+    controller: &mut C,
+    session: &C::Session,
+    timeout: Duration,
+) -> Result<(), ContainmentError> {
+    controller.kill(session)?;
+    let deadline = Instant::now() + timeout.min(MAX_TERMINATION_WAIT);
+    loop {
+        if !controller.populated(session)? {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(ContainmentError::PopulationTimeout);
+        }
+        std::thread::sleep(POPULATION_POLL.min(remaining));
+    }
+}
+
+/// Standalone settlement used by the containment foundation regressions.
 pub fn settle<C: Controller>(
     controller: &mut C,
     session: C::Session,
@@ -755,27 +807,15 @@ pub fn settle<C: Controller>(
     expired: bool,
     timeout: Duration,
 ) -> SessionOutcome {
-    let populated = match controller.populated(&session) {
-        Ok(value) => value,
+    let normal_completion = match quiesce(
+        controller,
+        &session,
+        direct_child_succeeded && !cancelled && !expired,
+        timeout,
+    ) {
+        Ok(normal) => normal,
         Err(error) => return SessionOutcome::Retained(error),
     };
-    let normal_completion = direct_child_succeeded && !cancelled && !expired && !populated;
-    if !normal_completion {
-        if let Err(error) = controller.kill(&session) {
-            return SessionOutcome::Retained(error);
-        }
-        let deadline = Instant::now() + timeout.min(MAX_TERMINATION_WAIT);
-        loop {
-            match controller.populated(&session) {
-                Ok(false) => break,
-                Ok(true) if Instant::now() < deadline => {
-                    std::thread::sleep(POPULATION_POLL);
-                }
-                Ok(true) => return SessionOutcome::Retained(ContainmentError::PopulationTimeout),
-                Err(error) => return SessionOutcome::Retained(error),
-            }
-        }
-    }
     if let Err(error) = controller.cleanup(session) {
         return SessionOutcome::Retained(error);
     }
@@ -881,8 +921,8 @@ mod tests {
             directory: root.try_clone().unwrap(),
             procs: writable,
         };
-        let mut command = Command::new("/bin/true");
-        let status = session.spawn(&mut command).unwrap().wait().unwrap();
+        let command = Command::new("/bin/true");
+        let status = session.spawn(command).unwrap().wait().unwrap();
         assert!(status.success());
         assert_eq!(fs::read(&path).unwrap(), b"0");
 
@@ -894,8 +934,8 @@ mod tests {
             directory: root,
             procs: readonly,
         };
-        let mut command = Command::new("/bin/true");
-        assert!(session.spawn(&mut command).is_err());
+        let command = Command::new("/bin/true");
+        assert!(session.spawn(command).is_err());
     }
 
     #[test]
@@ -1150,13 +1190,22 @@ mod tests {
         let session = subtree.create_session().expect("session cgroup creation");
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "exit 0"]);
-        let mut child = session.spawn(&mut command).expect("place before exec");
-        let status = child.wait().unwrap();
-        assert!(status.success());
-        session.wait_empty(Duration::from_secs(2)).unwrap();
+        // With every ancestor write-protected, an outside same-UID
+        // launcher must fail migration before backend exec.
+        let placement = session.spawn(command);
+        if let Ok(mut child) = placement {
+            session.terminate(Duration::from_secs(2)).unwrap();
+            let _ = child.try_wait();
+            panic!("outside same-UID placement unexpectedly succeeded");
+        }
+        session.wait_empty(Duration::ZERO).unwrap();
         session.cleanup().unwrap();
         assert!(!subtree.is_populated().unwrap());
         subtree.release().unwrap();
+        assert_eq!(
+            placement.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 }
 

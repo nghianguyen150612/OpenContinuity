@@ -137,3 +137,27 @@ The current Debian 13 / kernel 6.18.57 host has no writable delegation and no
 systemd manager. The opt-in cgroup integration test was NOT RUN. The aggregate
 disk quota remains unresolved and blocks Receive. See
 [the P019C foundation report](research/P019C_CGROUP_CONTAINMENT_FOUNDATION.md).
+
+## P019D internal lifecycle
+
+The internal coordinator acquires the actual cgroup lease before staging. It
+settles the whole subtree before joining terminal relays and separately
+verifies recursive emptiness before cleanup. Uncertain sessions preserve
+staging and runtime identity. Successful offline sessions also remain
+nonpublishable under the disabled crash supervision qualification gate.
+Production CLI and Qt Receive remain disabled.
+
+Local validation passed formatting, Clippy with warnings denied, workspace
+build, diff checks, **255 Rust tests with 1 ignored**, and **55 Python tests**.
+Seven coordinator tests passed, including abrupt subprocess exit fixtures.
+The ignored real-kernel placement rejection test was **NOT RUN**. The host
+has no exclusive delegation. **Crash supervision is NOT QUALIFIED**.
+The fake controller checks lifecycle policy and retention. Qualified placement,
+recursive kernel lifecycle tests and externally supervised crash recovery
+require separate host provisioning. Hard aggregate disk quota remains an
+independent activation blocker.
+
+Hosted Rust, Qt/QML and Swift/CryptoKit/watchOS results are tracked on the push
+and PR checks for the P019D commit. See the
+[P019D lifecycle and crash supervision report](research/P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md)
+for the kernel plan and placement limitation.

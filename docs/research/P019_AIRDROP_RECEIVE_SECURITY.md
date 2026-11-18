@@ -118,3 +118,11 @@ false availability gate and publication eligibility checks remain unchanged;
 the real-kernel integration test is NOT RUN on this host. Hard aggregate disk
 quota is still an independent blocker. See
 [P019C foundation](P019C_CGROUP_CONTAINMENT_FOUNDATION.md).
+
+## P019D lifecycle update
+
+The internal coordinator acquires a cgroup lease before staging and retains
+both staging and runtime identity if settlement or cleanup is uncertain.
+Publication also requires crash supervision qualification, which remains
+unavailable. Production Receive and Qt Receive stay disabled. See
+[P019D lifecycle and crash supervision](P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).

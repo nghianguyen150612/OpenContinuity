@@ -210,3 +210,15 @@ exclusive delegated subtree, inaccessible parent migration control, pre-exec
 placement, recursive population checks, and bounded subtree kill. Fake
 controller tests establish only application-state behavior. No real delegated
 kernel test has run here; aggregate disk quotas remain unimplemented.
+
+## P019D Receive lifecycle
+
+The internal coordinator retains staging and runtime identity when recursive
+writer shutdown or containment cleanup is uncertain. Production Receive stays
+disabled. A trusted external launcher is needed to enter a delegation whose
+ancestors are protected from backend migration. A separately credentialed
+manager or guardian must survive supervisor failure and independently stop the
+owned subtree. A same-UID watchdog is exposed to signals, control-file access
+and IPC interference. Process containment also assumes the backend cannot
+delegate writes to an external process. Hard aggregate disk quota remains an
+independent blocker. See [P019D lifecycle and crash supervision](research/P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).

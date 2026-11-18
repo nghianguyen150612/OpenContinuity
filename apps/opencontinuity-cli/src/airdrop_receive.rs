@@ -41,7 +41,7 @@ pub struct ReceiveLock {
 }
 
 /// Per-session state root used to keep Owly's generated TLS identity out of
-/// persistent XDG state. It is removed on every normal exit path.
+/// persistent XDG state. It is retained when writer cleanup is uncertain.
 #[derive(Debug)]
 pub struct ReceiveSessionState {
     root: PathBuf,
@@ -62,7 +62,7 @@ impl ReceiveSessionState {
         Self::create_in(Path::new(&runtime))
     }
 
-    fn create_in(directory: &Path) -> io::Result<Self> {
+    pub(super) fn create_in(directory: &Path) -> io::Result<Self> {
         let directory_meta = fs::symlink_metadata(directory)?;
         if !directory_meta.is_dir() || directory_meta.file_type().is_symlink() {
             return Err(io::Error::new(
@@ -103,6 +103,11 @@ impl ReceiveSessionState {
             io::ErrorKind::AlreadyExists,
             "could not allocate private receive state",
         ))
+    }
+
+    pub fn discard(mut self) -> io::Result<()> {
+        self.keep = true;
+        fs::remove_dir_all(&self.root)
     }
 
     pub fn path(&self) -> &Path {

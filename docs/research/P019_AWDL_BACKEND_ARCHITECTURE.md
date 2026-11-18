@@ -112,3 +112,12 @@ delegation because members may migrate within it. The current host lacks
 delegation; the real-kernel test was not run, and the receive availability gate
 remains false. See
 [P019C cgroup foundation](P019C_CGROUP_CONTAINMENT_FOUNDATION.md).
+
+## P019D lifecycle update
+
+The disabled Receive path now composes lease acquisition, pre-exec placement,
+tree settlement, bounded relay completion, independent population verification
+and private data cleanup. The parent and all higher ancestor controls must be
+protected against migration. A trusted external launcher and a manager that
+can kill the subtree on supervisor loss are still required. See
+[P019D lifecycle and crash supervision](P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).

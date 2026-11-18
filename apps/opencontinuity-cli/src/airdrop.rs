@@ -528,6 +528,7 @@ fn run_receive(_: &[String]) -> ExitCode {
 #[cfg(target_os = "linux")]
 mod receive {
     use super::*;
+    use crate::airdrop::containment::{self, ContainmentError, Controller, DelegatedSubtree};
     use crate::airdrop::process::MAX_RECEIVE_TERMINAL_OUTPUT;
     use crate::airdrop::storage::{ReceiveLock, ReceiveSessionState, ReceiveStaging};
     use opencontinuity_core::airdrop::{BlockReason, ReceiveLifecycle, ReceiveState};
@@ -537,9 +538,10 @@ mod receive {
     use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::AtomicUsize;
 
-    #[derive(Debug, Clone, Copy, Serialize)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
     #[serde(rename_all = "snake_case")]
     enum EndReason {
         Cancelled,
@@ -677,9 +679,6 @@ mod receive {
                 ReceiveState::Failed,
             );
         }
-        // P019C's cgroup foundation is not wired into this supervisor.
-        // Keep Receive blocked until the complete lifecycle and every other
-        // publication condition are integrated and qualified.
         if !writer_containment_available() {
             return print_blocked(
                 BlockReason::BackendFailed,
@@ -687,26 +686,6 @@ mod receive {
                 ReceiveState::Failed,
             );
         }
-        let mut staging = match ReceiveStaging::create(&options.destination) {
-            Ok(staging) => staging,
-            Err(_) => {
-                return print_blocked(
-                    BlockReason::DestinationUnavailable,
-                    EndReason::Failed,
-                    ReceiveState::Failed,
-                );
-            }
-        };
-        let mut session_state = match ReceiveSessionState::create_runtime() {
-            Ok(state) => state,
-            Err(_) => {
-                return print_blocked(
-                    BlockReason::PermissionUnavailable,
-                    EndReason::Failed,
-                    ReceiveState::Failed,
-                );
-            }
-        };
         let Some(executable) = find_fixed_executable("owly") else {
             return print_blocked(
                 BlockReason::BackendNotInstalled,
@@ -714,77 +693,12 @@ mod receive {
                 ReceiveState::Failed,
             );
         };
-
-        let stage_path = staging.path().as_os_str().to_os_string();
-        let mut command = Command::new(executable);
-        command
-            .arg("receive")
-            .arg("--iface")
-            .arg("awdl0")
-            .arg("--name")
-            .arg("OpenContinuity")
-            .arg("--dir")
-            .arg(stage_path)
-            .env("XDG_STATE_HOME", session_state.path())
-            .env_remove("RUST_LOG")
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        install_child_limits(&mut command);
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(_) => {
-                return print_blocked(
-                    BlockReason::BackendFailed,
-                    EndReason::Failed,
-                    ReceiveState::Failed,
-                );
-            }
-        };
-
-        staging.retain_until_quiescent();
-        session_state.retain_until_quiescent();
-        let Some(child_stdout) = child.stdout.take() else {
-            terminate_child(&mut child, Duration::from_secs(2));
-            return print_blocked(
-                BlockReason::BackendFailed,
-                EndReason::Failed,
-                ReceiveState::Failed,
-            );
-        };
-        let Some(child_stderr) = child.stderr.take() else {
-            terminate_child(&mut child, Duration::from_secs(2));
-            return print_blocked(
-                BlockReason::BackendFailed,
-                EndReason::Failed,
-                ReceiveState::Failed,
-            );
-        };
-        let output_bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let output_exceeded = Arc::new(AtomicBool::new(false));
-        let output_failed = Arc::new(AtomicBool::new(false));
-        let stdout_relay = spawn_terminal_relay(
-            child_stdout,
-            output_bytes.clone(),
-            output_exceeded.clone(),
-            output_failed.clone(),
-        );
-        let stderr_relay = spawn_terminal_relay(
-            child_stderr,
-            output_bytes,
-            output_exceeded.clone(),
-            output_failed.clone(),
-        );
-
         let cancelled = Arc::new(AtomicBool::new(false));
-        let mut signal_ids = Vec::new();
+        let mut signals = CancelSignals(Vec::new());
         for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
             match signal_hook::flag::register(signal, cancelled.clone()) {
-                Ok(id) => signal_ids.push(id),
+                Ok(id) => signals.0.push(id),
                 Err(_) => {
-                    terminate_child(&mut child, Duration::from_secs(2));
-                    let _ = join_relay(stdout_relay);
-                    let _ = join_relay(stderr_relay);
                     return print_blocked(
                         BlockReason::BackendFailed,
                         EndReason::Failed,
@@ -793,56 +707,298 @@ mod receive {
                 }
             }
         }
+        let admission = Admission {
+            destination: &options.destination,
+            cancelled: &cancelled,
+            deadline: Instant::now() + Duration::from_secs(options.duration_seconds.into()),
+            now: &Instant::now,
+        };
+        let result = coordinate(
+            admission,
+            DelegatedSubtree::from_environment,
+            ReceiveSessionState::create_runtime,
+            |session, staging, runtime| {
+                let mut command = Command::new(executable);
+                command
+                    .args([
+                        "receive",
+                        "--iface",
+                        "awdl0",
+                        "--name",
+                        "OpenContinuity",
+                        "--dir",
+                    ])
+                    .arg(staging.path())
+                    .env("XDG_STATE_HOME", runtime.path())
+                    .env_remove("RUST_LOG")
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                install_child_limits(&mut command);
+                session.spawn(command)
+            },
+            || open_nonblocking_terminal(libc::STDERR_FILENO),
+            MAX_RECEIVE_TERMINAL_OUTPUT,
+        );
+        match result {
+            Ok(completion) => report_completion(completion),
+            Err((block, completion)) if completion.cleanup == "complete" => {
+                print_blocked(block, completion.run.0, completion.run.1)
+            }
+            Err((block, completion)) => emit_completion(completion, Some(block)),
+        }
+    }
 
-        let deadline = Instant::now() + Duration::from_secs(options.duration_seconds.into());
-        let (mut end_reason, mut state, mut child_status) = supervise(
-            &mut child,
-            &staging,
-            deadline,
-            &cancelled,
-            &output_exceeded,
-            &output_failed,
+    struct CancelSignals(Vec<signal_hook::SigId>);
+
+    impl Drop for CancelSignals {
+        fn drop(&mut self) {
+            for id in self.0.drain(..) {
+                signal_hook::low_level::unregister(id);
+            }
+        }
+    }
+
+    /// The CLI constructs this only after consent, argument and radio checks.
+    /// Its deadline bounds consent through the terminal decision.
+    struct Admission<'a> {
+        destination: &'a Path,
+        cancelled: &'a AtomicBool,
+        deadline: Instant,
+        now: &'a dyn Fn() -> Instant,
+    }
+
+    impl Admission<'_> {
+        fn interrupted(&self) -> Option<BackendRun> {
+            if self.cancelled.load(Ordering::Relaxed) {
+                Some((
+                    EndReason::Cancelled,
+                    ReceiveState::Cancelled,
+                    BackendState::Failed,
+                ))
+            } else if (self.now)() >= self.deadline {
+                Some((
+                    EndReason::Expired,
+                    ReceiveState::Expired,
+                    BackendState::Failed,
+                ))
+            } else {
+                None
+            }
+        }
+    }
+
+    type BackendRun = (EndReason, ReceiveState, BackendState);
+    const FAILED: BackendRun = (
+        EndReason::Failed,
+        ReceiveState::Failed,
+        BackendState::Failed,
+    );
+    const CRASH_SUPERVISION_QUALIFIED: bool = false;
+    const STOP_TIMEOUT: Duration = Duration::from_secs(2);
+
+    #[derive(Debug)]
+    struct Completion {
+        run: BackendRun,
+        files: u64,
+        bytes: u64,
+        cleanup: &'static str,
+    }
+
+    impl Completion {
+        fn retained(run: BackendRun) -> Self {
+            let run = if run.1 == ReceiveState::Completed {
+                FAILED
+            } else {
+                run
+            };
+            Self {
+                run,
+                files: 0,
+                bytes: 0,
+                cleanup: "incomplete",
+            }
+        }
+
+        fn no_resources(run: BackendRun) -> Self {
+            Self {
+                cleanup: "complete",
+                ..Self::retained(run)
+            }
+        }
+    }
+
+    /// Own the lease from before staging creation through tree settlement.
+    /// Injection is internal. Neither qualification gate depends on it.
+    fn coordinate<C: Controller, W: io::Write + Send + 'static>(
+        admission: Admission<'_>,
+        acquire: impl FnOnce() -> Result<C, ContainmentError>,
+        prepare_runtime: impl FnOnce() -> io::Result<ReceiveSessionState>,
+        launch: impl FnOnce(&C::Session, &ReceiveStaging, &ReceiveSessionState) -> io::Result<Child>,
+        terminal: impl Fn() -> io::Result<W>,
+        output_limit: usize,
+    ) -> Result<Completion, (BlockReason, Completion)> {
+        if let Some(run) = admission.interrupted() {
+            return Ok(Completion::no_resources(run));
+        }
+        let mut lease =
+            acquire().map_err(|_| (BlockReason::BackendFailed, Completion::retained(FAILED)))?;
+        let session = lease
+            .create()
+            .map_err(|_| (BlockReason::BackendFailed, Completion::retained(FAILED)))?;
+
+        // Prepare both private resources before exec, with retention armed
+        // before an untrusted process can ever see either path.
+        let resources = ReceiveStaging::create(admission.destination)
+            .map_err(|_| BlockReason::DestinationUnavailable)
+            .and_then(|staging| {
+                let runtime = prepare_runtime().map_err(|_| BlockReason::PermissionUnavailable)?;
+                Ok((staging, runtime))
+            });
+        let (mut staging, mut runtime) = match resources {
+            Ok(resources) => resources,
+            Err(reason) => {
+                let clean = lease
+                    .cleanup(session)
+                    .and_then(|()| lease.release())
+                    .is_ok();
+                let completion = if clean {
+                    Completion::no_resources(FAILED)
+                } else {
+                    Completion::retained(FAILED)
+                };
+                return Err((reason, completion));
+            }
+        };
+        staging.retain_until_quiescent();
+        runtime.retain_until_quiescent();
+
+        let output = Arc::new(RelayStatus::default());
+        let mut relays = Vec::new();
+        let mut child = None;
+        let mut run = if let Some(run) = admission.interrupted() {
+            run
+        } else if let Ok(process) = launch(&session, &staging, &runtime) {
+            let process = child.insert(process);
+            match (
+                process.stdout.take(),
+                process.stderr.take(),
+                terminal(),
+                terminal(),
+            ) {
+                (Some(stdout), Some(stderr), Ok(out), Ok(err)) => {
+                    relays.extend(
+                        [
+                            spawn_terminal_relay(stdout, out, &output, output_limit),
+                            spawn_terminal_relay(stderr, err, &output, output_limit),
+                        ]
+                        .into_iter()
+                        .flatten(),
+                    );
+                    poll_backend(
+                        process,
+                        &staging,
+                        &admission,
+                        &output.exceeded,
+                        &output.failed,
+                    )
+                }
+                _ => FAILED,
+            }
+        } else {
+            FAILED
+        };
+
+        // Terminate the subtree before waiting for inherited pipe writers.
+        // A direct child status can never establish recursive emptiness.
+        let quiescence = containment::quiesce(
+            &mut lease,
+            &session,
+            run.1 == ReceiveState::Completed,
+            STOP_TIMEOUT,
         );
-        let stdout_ok = join_relay(stdout_relay);
-        let stderr_ok = join_relay(stderr_relay);
-        if !stdout_ok || !stderr_ok {
-            output_failed.store(true, Ordering::Relaxed);
+        let reaped = child.as_mut().is_none_or(reap_backend);
+        let relay_deadline = Instant::now() + STOP_TIMEOUT;
+        let mut relays_joined = true;
+        for relay in relays {
+            relays_joined &= join_relay(relay, relay_deadline, &output.stop);
         }
-        if output_exceeded.load(Ordering::Relaxed) {
-            end_reason = EndReason::OutputLimitExceeded;
-            state = ReceiveState::Failed;
-            child_status = BackendState::Failed;
-        } else if output_failed.load(Ordering::Relaxed) {
-            end_reason = EndReason::Failed;
-            state = ReceiveState::Failed;
-            child_status = BackendState::Failed;
+        run = admission.interrupted().unwrap_or_else(|| {
+            if output.exceeded.load(Ordering::Relaxed) {
+                (
+                    EndReason::OutputLimitExceeded,
+                    ReceiveState::Failed,
+                    BackendState::Failed,
+                )
+            } else if output.failed.load(Ordering::Relaxed) || !relays_joined {
+                FAILED
+            } else {
+                run
+            }
+        });
+        let Ok(normal_exit) = quiescence else {
+            return Ok(Completion::retained(run));
+        };
+        if !reaped || !relays_joined {
+            return Ok(Completion::retained(run));
         }
-        if cancelled.load(Ordering::Relaxed) {
-            end_reason = EndReason::Cancelled;
-            state = ReceiveState::Cancelled;
-        } else if Instant::now() >= deadline && matches!(end_reason, EndReason::BackendExited) {
-            end_reason = EndReason::Expired;
-            state = ReceiveState::Expired;
+
+        // Confirm emptiness again after reaping and relay completion. A
+        // change since settlement is an ownership or observation failure.
+        if lease.populated(&session) != Ok(false) {
+            let _ = containment::quiesce(&mut lease, &session, false, STOP_TIMEOUT);
+            return Ok(Completion::retained(run));
         }
-        for id in signal_ids {
-            signal_hook::low_level::unregister(id);
+
+        // The real cleanup reads recursive population again before changing
+        // the cgroups. Reservation release must succeed before touching data.
+        if lease
+            .cleanup(session)
+            .and_then(|()| lease.release())
+            .is_err()
+        {
+            return Ok(Completion::retained(run));
         }
-        // A reaped leader is not evidence that descendants stopped writing.
-        let writers_quiescent = false;
+        run = admission.interrupted().unwrap_or(run);
         let eligible = publication_eligible(
-            end_reason,
-            state,
-            child_status,
-            &cancelled,
-            &output_exceeded,
-            &output_failed,
-            writers_quiescent,
+            run.0,
+            run.1,
+            run.2,
+            admission.cancelled,
+            &output.exceeded,
+            &output.failed,
+            normal_exit,
         );
-        let (files, bytes, cleanup) = finish_staging(staging, eligible, writers_quiescent);
-        if matches!(state, ReceiveState::Completed) && (!eligible || cleanup != "complete") {
-            state = ReceiveState::Failed;
-            end_reason = EndReason::Failed;
+        if eligible && !CRASH_SUPERVISION_QUALIFIED {
+            return Ok(Completion::retained(run));
         }
+        if runtime.discard().is_err() {
+            return Ok(Completion::retained(run));
+        }
+        let (files, bytes, cleanup) =
+            finish_staging(staging, eligible && CRASH_SUPERVISION_QUALIFIED, true);
+        if run.1 == ReceiveState::Completed && (!eligible || cleanup != "complete") {
+            run = FAILED;
+        }
+        Ok(Completion {
+            run,
+            files,
+            bytes,
+            cleanup,
+        })
+    }
+
+    #[derive(Default)]
+    struct RelayStatus {
+        bytes: AtomicUsize,
+        exceeded: AtomicBool,
+        failed: AtomicBool,
+        stop: AtomicBool,
+    }
+
+    fn report_completion(completion: Completion) -> ExitCode {
+        let (end_reason, _, _) = completion.run;
+        let cleanup = completion.cleanup;
         let block_reason = match end_reason {
             EndReason::Cancelled => Some(BlockReason::Cancelled),
             EndReason::Expired => Some(BlockReason::SessionExpired),
@@ -853,6 +1009,17 @@ mod receive {
             EndReason::BackendExited if cleanup != "complete" => Some(BlockReason::BackendFailed),
             EndReason::BackendExited => None,
         };
+        emit_completion(completion, block_reason)
+    }
+
+    fn emit_completion(completion: Completion, block_reason: Option<BlockReason>) -> ExitCode {
+        let (end_reason, state, child_status) = completion.run;
+        let Completion {
+            files,
+            bytes,
+            cleanup,
+            ..
+        } = completion;
         let mut lifecycle = ReceiveLifecycle::default();
         let _ = lifecycle.transition(ReceiveState::Preparing);
         let _ = lifecycle.transition(ReceiveState::Active);
@@ -934,17 +1101,15 @@ mod receive {
         }
     }
 
-    fn supervise(
+    fn poll_backend(
         child: &mut std::process::Child,
         staging: &ReceiveStaging,
-        deadline: Instant,
-        cancelled: &AtomicBool,
+        admission: &Admission<'_>,
         output_exceeded: &AtomicBool,
         output_failed: &AtomicBool,
     ) -> (EndReason, ReceiveState, BackendState) {
         loop {
             if output_exceeded.load(Ordering::Relaxed) {
-                let _ = terminate_child(child, Duration::from_secs(2));
                 return (
                     EndReason::OutputLimitExceeded,
                     ReceiveState::Failed,
@@ -952,36 +1117,14 @@ mod receive {
                 );
             }
             if output_failed.load(Ordering::Relaxed) {
-                let _ = terminate_child(child, Duration::from_secs(2));
                 return (
                     EndReason::Failed,
                     ReceiveState::Failed,
                     BackendState::Failed,
                 );
             }
-            if cancelled.load(Ordering::Relaxed) {
-                let status = terminate_child(child, Duration::from_secs(2));
-                return (
-                    EndReason::Cancelled,
-                    ReceiveState::Cancelled,
-                    if status {
-                        BackendState::Available
-                    } else {
-                        BackendState::Failed
-                    },
-                );
-            }
-            if Instant::now() >= deadline {
-                let status = terminate_child(child, Duration::from_secs(2));
-                return (
-                    EndReason::Expired,
-                    ReceiveState::Expired,
-                    if status {
-                        BackendState::Available
-                    } else {
-                        BackendState::Failed
-                    },
-                );
+            if let Some(run) = admission.interrupted() {
+                return run;
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -1001,7 +1144,6 @@ mod receive {
                 }
                 Ok(None) => {}
                 Err(_) => {
-                    let _ = terminate_child(child, Duration::from_secs(2));
                     return (
                         EndReason::Failed,
                         ReceiveState::Failed,
@@ -1010,7 +1152,6 @@ mod receive {
                 }
             }
             if staging.usage().is_err() {
-                let _ = terminate_child(child, Duration::from_secs(2));
                 return (
                     EndReason::OutputLimitExceeded,
                     ReceiveState::Failed,
@@ -1027,29 +1168,51 @@ mod receive {
         false
     }
 
-    fn terminate_child(child: &mut std::process::Child, grace: Duration) -> bool {
-        // Child::kill targets only our unreaped direct child. Never signal a
-        // recycled PGID after leader reaping. This does NOT establish writer
-        // quiescence, so the receive activation gate remains closed.
-        let _ = child.kill();
-        let deadline = Instant::now() + grace;
+    fn reap_backend(child: &mut Child) -> bool {
+        let deadline = Instant::now() + STOP_TIMEOUT;
         loop {
             match child.try_wait() {
-                Ok(Some(status)) => return status.success(),
+                Ok(Some(_)) => return true,
                 Err(_) => return false,
-                Ok(None) => {}
+                Ok(None) if Instant::now() >= deadline => return false,
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
             }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
-    fn join_relay(relay: std::thread::JoinHandle<io::Result<()>>) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(2);
+    #[cfg(test)]
+    fn supervise(
+        child: &mut Child,
+        staging: &ReceiveStaging,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+        output_exceeded: &AtomicBool,
+        output_failed: &AtomicBool,
+    ) -> BackendRun {
+        let admission = Admission {
+            destination: staging.path(),
+            cancelled,
+            deadline,
+            now: &Instant::now,
+        };
+        let result = poll_backend(child, staging, &admission, output_exceeded, output_failed);
+        // Legacy fixtures own one direct child. The coordinator uses the
+        // cgroup controller for termination instead.
+        if child.try_wait().is_ok_and(|status| status.is_none()) {
+            let _ = child.kill();
+            let _ = reap_backend(child);
+        }
+        result
+    }
+
+    fn join_relay(
+        relay: std::thread::JoinHandle<io::Result<()>>,
+        deadline: Instant,
+        stop: &AtomicBool,
+    ) -> bool {
         while !relay.is_finished() {
             if Instant::now() >= deadline {
+                stop.store(true, Ordering::Relaxed);
                 return false;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -1057,29 +1220,64 @@ mod receive {
         relay.join().is_ok_and(|result| result.is_ok())
     }
 
-    fn spawn_terminal_relay<R: io::Read + Send + 'static>(
-        reader: R,
-        bytes: Arc<std::sync::atomic::AtomicUsize>,
-        exceeded: Arc<AtomicBool>,
-        failed: Arc<AtomicBool>,
-    ) -> std::thread::JoinHandle<io::Result<()>> {
-        std::thread::spawn(move || {
-            let mut writer = match open_nonblocking_terminal(libc::STDERR_FILENO) {
-                Ok(writer) => writer,
-                Err(error) => {
-                    failed.store(true, Ordering::Relaxed);
-                    return Err(error);
+    // Child pipe read ends are private to the supervisor. Nonblocking reads
+    // let us stop draining even if a pipe descriptor escaped the subtree.
+    struct RelayReader<R> {
+        pipe: R,
+        status: Arc<RelayStatus>,
+    }
+
+    impl<R: io::Read> io::Read for RelayReader<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            while !self.status.stop.load(Ordering::Relaxed) {
+                match self.pipe.read(buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    result => return result,
                 }
+            }
+            Err(io::Error::from(io::ErrorKind::Interrupted))
+        }
+    }
+
+    fn spawn_terminal_relay(
+        reader: impl io::Read + AsRawFd + Send + 'static,
+        writer: impl io::Write + Send + 'static,
+        output: &Arc<RelayStatus>,
+        limit: usize,
+    ) -> Option<std::thread::JoinHandle<io::Result<()>>> {
+        let fd = reader.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+            output.failed.store(true, Ordering::Relaxed);
+            return None;
+        }
+        let status = output.clone();
+        match std::thread::Builder::new().spawn(move || {
+            let reader = RelayReader {
+                pipe: reader,
+                status: status.clone(),
             };
-            crate::airdrop::process::relay_bounded(
+            let result = process::relay_bounded(
                 reader,
-                &mut writer,
-                &bytes,
-                &exceeded,
-                &failed,
-                MAX_RECEIVE_TERMINAL_OUTPUT,
-            )
-        })
+                writer,
+                &status.bytes,
+                &status.exceeded,
+                &status.failed,
+                limit,
+            );
+            if result.is_err() {
+                status.failed.store(true, Ordering::Relaxed);
+            }
+            result
+        }) {
+            Ok(relay) => Some(relay),
+            Err(_) => {
+                output.failed.store(true, Ordering::Relaxed);
+                None
+            }
+        }
     }
 
     fn open_nonblocking_terminal(fd: RawFd) -> io::Result<File> {
@@ -1155,6 +1353,390 @@ mod receive {
     mod tests {
         use super::*;
         use std::process::{Command, Stdio};
+
+        #[derive(Clone, Copy, Default, PartialEq, Eq)]
+        enum CrashPoint {
+            #[default]
+            None,
+            Startup,
+            Active,
+            Finalization,
+        }
+
+        #[derive(Default)]
+        struct Scenario {
+            script: &'static str,
+            placement_fails: bool,
+            cancel: bool,
+            expire: bool,
+            relay_fails: bool,
+            limited: bool,
+            observations: Vec<Result<bool, ContainmentError>>,
+            kill_fails: bool,
+            stuck: bool,
+            cleanup_fails: bool,
+            release_fails: bool,
+            crash: CrashPoint,
+        }
+
+        struct FixtureLease<'a> {
+            marker: PathBuf,
+            events: &'a std::cell::RefCell<Vec<&'static str>>,
+            scenario: &'a Scenario,
+            observations: std::vec::IntoIter<Result<bool, ContainmentError>>,
+        }
+
+        impl Controller for FixtureLease<'_> {
+            type Session = ();
+
+            fn create(&mut self) -> Result<(), ContainmentError> {
+                self.events.borrow_mut().push("create");
+                crash_at(self.scenario.crash, CrashPoint::Startup);
+                Ok(())
+            }
+
+            fn populated(&mut self, (): &()) -> Result<bool, ContainmentError> {
+                self.events.borrow_mut().push("observe");
+                self.observations.next().unwrap_or(Ok(self.scenario.stuck))
+            }
+
+            fn kill(&mut self, (): &()) -> Result<(), ContainmentError> {
+                self.events.borrow_mut().push("kill");
+                if self.scenario.kill_fails {
+                    return Err(ContainmentError::KillFailed);
+                }
+                Ok(())
+            }
+
+            fn cleanup(&mut self, (): ()) -> Result<(), ContainmentError> {
+                self.events.borrow_mut().push("cleanup");
+                crash_at(self.scenario.crash, CrashPoint::Finalization);
+                if self.scenario.cleanup_fails {
+                    return Err(ContainmentError::CleanupFailed);
+                }
+                Ok(())
+            }
+
+            fn release(&mut self) -> Result<(), ContainmentError> {
+                self.events.borrow_mut().push("release");
+                if self.scenario.release_fails {
+                    return Err(ContainmentError::CleanupFailed);
+                }
+                std::fs::remove_dir(&self.marker).unwrap();
+                Ok(())
+            }
+        }
+
+        fn crash_at(selected: CrashPoint, current: CrashPoint) {
+            if selected == current {
+                // Exit without unwinding to model abrupt supervisor loss.
+                std::process::exit(86);
+            }
+        }
+
+        struct FixtureTerminal(bool);
+
+        impl io::Write for FixtureTerminal {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.0 {
+                    Err(io::Error::other("fixture terminal write failure"))
+                } else {
+                    Ok(bytes.len())
+                }
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        fn fixture_session(root: &Path, scenario: &Scenario) -> (Completion, Vec<&'static str>) {
+            let cancelled = AtomicBool::new(false);
+            let expired = std::cell::Cell::new(false);
+            let origin = Instant::now();
+            let deadline = origin + Duration::from_secs(30);
+            let clock = || if expired.get() { deadline } else { origin };
+            let destination = root.join("dest");
+            let runtime = root.join("runtime");
+            let events = std::cell::RefCell::new(Vec::new());
+            let result = coordinate(
+                Admission {
+                    destination: &destination,
+                    cancelled: &cancelled,
+                    deadline,
+                    now: &clock,
+                },
+                || {
+                    events.borrow_mut().push("acquire");
+                    let marker = root.join("owner");
+                    std::fs::create_dir(&marker)
+                        .map_err(|_| ContainmentError::InvalidDelegation)?;
+                    Ok(FixtureLease {
+                        marker,
+                        events: &events,
+                        scenario,
+                        observations: scenario.observations.clone().into_iter(),
+                    })
+                },
+                || {
+                    events.borrow_mut().push("prepare");
+                    ReceiveSessionState::create_in(&runtime)
+                },
+                |(), staging, runtime| {
+                    events.borrow_mut().push("launch");
+                    if scenario.placement_fails {
+                        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+                    }
+                    std::fs::write(staging.path().join("payload"), b"fixture").unwrap();
+                    std::fs::write(runtime.path().join("identity"), b"fixture").unwrap();
+                    crash_at(scenario.crash, CrashPoint::Active);
+                    let child = Command::new("/bin/sh")
+                        .args(["-c", scenario.script])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn()?;
+                    cancelled.store(scenario.cancel, Ordering::Relaxed);
+                    expired.set(scenario.expire);
+                    Ok(child)
+                },
+                || Ok(FixtureTerminal(scenario.relay_fails)),
+                if scenario.limited {
+                    1
+                } else {
+                    MAX_RECEIVE_TERMINAL_OUTPUT
+                },
+            );
+            let completion = result.unwrap_or_else(|(_, completion)| completion);
+            assert_eq!((completion.files, completion.bytes), (0, 0));
+            assert!(std::fs::read_dir(destination).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("AirDrop Receive ")
+            }));
+            (completion, events.into_inner())
+        }
+
+        fn fixture_root() -> tempfile::TempDir {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("dest")).unwrap();
+            let mut runtime = std::fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut runtime, 0o700);
+            runtime.create(root.path().join("runtime")).unwrap();
+            root
+        }
+
+        fn private_resource_counts(root: &Path) -> (usize, usize) {
+            (
+                std::fs::read_dir(root.join("dest")).unwrap().count(),
+                std::fs::read_dir(root.join("runtime")).unwrap().count(),
+            )
+        }
+
+        #[test]
+        fn coordinator_success_releases_lease_but_remains_nonpublishable() {
+            let root = fixture_root();
+            for attempts in 1..=2 {
+                let (completion, events) = fixture_session(root.path(), &Scenario::default());
+                assert_eq!(completion.run, FAILED);
+                assert_eq!(completion.cleanup, "incomplete");
+                assert_eq!(
+                    events,
+                    [
+                        "acquire", "create", "prepare", "launch", "observe", "observe", "cleanup",
+                        "release"
+                    ]
+                );
+                assert!(!root.path().join("owner").exists());
+                assert_eq!(private_resource_counts(root.path()), (attempts, attempts));
+            }
+        }
+
+        #[test]
+        fn coordinator_failed_execution_settles_then_discards() {
+            for (scenario, reason) in [
+                (
+                    Scenario {
+                        placement_fails: true,
+                        ..Default::default()
+                    },
+                    EndReason::Failed,
+                ),
+                (
+                    Scenario {
+                        script: "exit 7",
+                        ..Default::default()
+                    },
+                    EndReason::Failed,
+                ),
+                (
+                    Scenario {
+                        cancel: true,
+                        ..Default::default()
+                    },
+                    EndReason::Cancelled,
+                ),
+                (
+                    Scenario {
+                        expire: true,
+                        ..Default::default()
+                    },
+                    EndReason::Expired,
+                ),
+                (
+                    Scenario {
+                        script: "printf abc",
+                        limited: true,
+                        ..Default::default()
+                    },
+                    EndReason::OutputLimitExceeded,
+                ),
+                (
+                    Scenario {
+                        script: "printf abc",
+                        relay_fails: true,
+                        ..Default::default()
+                    },
+                    EndReason::Failed,
+                ),
+            ] {
+                let root = fixture_root();
+                let (completion, events) = fixture_session(root.path(), &scenario);
+                assert_eq!(completion.run.0, reason);
+                assert_eq!(completion.cleanup, "complete");
+                assert_eq!(private_resource_counts(root.path()), (0, 0));
+                assert!(events.ends_with(&["observe", "cleanup", "release"]));
+                if scenario.placement_fails || scenario.cancel || scenario.expire {
+                    assert!(events.contains(&"kill"));
+                }
+            }
+        }
+
+        #[test]
+        fn coordinator_surviving_or_migrated_descendants_require_tree_kill() {
+            let root = fixture_root();
+            let (completion, events) = fixture_session(
+                root.path(),
+                &Scenario {
+                    // The delegation stays populated after child exit. Its
+                    // writer may have moved out of the session into a sibling.
+                    observations: vec![Ok(true), Ok(true), Ok(false), Ok(false)],
+                    ..Default::default()
+                },
+            );
+            assert_eq!(completion.run, FAILED);
+            assert_eq!(completion.cleanup, "complete");
+            assert!(events.ends_with(&[
+                "observe", "kill", "observe", "observe", "observe", "cleanup", "release"
+            ]));
+            assert_eq!(private_resource_counts(root.path()), (0, 0));
+        }
+
+        #[test]
+        fn coordinator_uncertain_tree_or_cleanup_retains_both_private_resources() {
+            for scenario in [
+                Scenario {
+                    observations: vec![Ok(true)],
+                    kill_fails: true,
+                    ..Default::default()
+                },
+                Scenario {
+                    observations: vec![Err(ContainmentError::ObservationFailed)],
+                    ..Default::default()
+                },
+                Scenario {
+                    stuck: true,
+                    ..Default::default()
+                },
+                Scenario {
+                    observations: vec![Ok(false), Ok(true)],
+                    ..Default::default()
+                },
+                Scenario {
+                    cleanup_fails: true,
+                    ..Default::default()
+                },
+                Scenario {
+                    release_fails: true,
+                    ..Default::default()
+                },
+            ] {
+                let root = fixture_root();
+                let (completion, events) = fixture_session(root.path(), &scenario);
+                assert_eq!(completion.run, FAILED);
+                assert_eq!(completion.cleanup, "incomplete");
+                assert_eq!(private_resource_counts(root.path()), (1, 1));
+                assert!(root.path().join("owner").exists());
+                if !scenario.cleanup_fails && !scenario.release_fails {
+                    assert!(events.contains(&"kill"));
+                    assert!(!events.contains(&"cleanup"));
+                }
+            }
+        }
+
+        #[test]
+        fn coordinator_relay_deadline_stops_a_reader_without_pipe_eof() {
+            let (reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let output = Arc::new(RelayStatus::default());
+            let relay = spawn_terminal_relay(reader, io::sink(), &output, 16).unwrap();
+            assert!(!join_relay(relay, Instant::now(), &output.stop));
+            // Retain the writer until the reader has observed the stop
+            // request. EOF cannot account for completion in this test.
+            let deadline = Instant::now() + STOP_TIMEOUT;
+            while !output.failed.load(Ordering::Relaxed) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(output.failed.load(Ordering::Relaxed));
+            drop(writer);
+        }
+
+        #[test]
+        fn coordinator_abrupt_exit_fixture() {
+            let Ok(phase) = std::env::var("OC_P019D_FIXTURE_PHASE") else {
+                return;
+            };
+            let root = PathBuf::from(std::env::var_os("OC_P019D_FIXTURE_ROOT").unwrap());
+            let crash = match phase.as_str() {
+                "startup" => CrashPoint::Startup,
+                "active" => CrashPoint::Active,
+                "finalization" => CrashPoint::Finalization,
+                _ => panic!("unknown crash fixture phase"),
+            };
+            fixture_session(
+                &root,
+                &Scenario {
+                    crash,
+                    ..Default::default()
+                },
+            );
+            panic!("fixture did not stop");
+        }
+
+        #[test]
+        fn coordinator_crash_preserves_reservations_and_blocks_restart() {
+            for (phase, retained) in [("startup", 0), ("active", 1), ("finalization", 1)] {
+                let root = fixture_root();
+                let exit = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "airdrop::receive::tests::coordinator_abrupt_exit_fixture",
+                    ])
+                    .env("OC_P019D_FIXTURE_PHASE", phase)
+                    .env("OC_P019D_FIXTURE_ROOT", root.path())
+                    .stdout(Stdio::null())
+                    .status()
+                    .unwrap();
+                assert_eq!(exit.code(), Some(86));
+                assert!(root.path().join("owner").exists());
+                assert_eq!(private_resource_counts(root.path()), (retained, retained));
+                let (completion, events) = fixture_session(root.path(), &Scenario::default());
+                assert_eq!(completion.cleanup, "incomplete");
+                assert_eq!(events, ["acquire"]);
+                assert_eq!(private_resource_counts(root.path()), (retained, retained));
+            }
+        }
 
         #[test]
         fn receive_options_require_exact_backend_consent_destination_and_bounds() {
