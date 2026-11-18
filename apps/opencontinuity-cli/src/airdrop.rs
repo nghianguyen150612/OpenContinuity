@@ -18,6 +18,9 @@ mod containment;
 #[path = "airdrop_process.rs"]
 mod process;
 #[cfg(target_os = "linux")]
+#[path = "airdrop_quota.rs"]
+mod quota;
+#[cfg(target_os = "linux")]
 #[path = "airdrop_receive.rs"]
 mod storage;
 
@@ -530,6 +533,9 @@ mod receive {
     use super::*;
     use crate::airdrop::containment::{self, ContainmentError, Controller, DelegatedSubtree};
     use crate::airdrop::process::MAX_RECEIVE_TERMINAL_OUTPUT;
+    #[cfg(test)]
+    use crate::airdrop::quota::QuotaSnapshot;
+    use crate::airdrop::quota::{ProjectQuotaLease, QuotaError, QuotaLease};
     use crate::airdrop::storage::{ReceiveLock, ReceiveSessionState, ReceiveStaging};
     use opencontinuity_core::airdrop::{BlockReason, ReceiveLifecycle, ReceiveState};
     use serde::Serialize;
@@ -716,7 +722,7 @@ mod receive {
         let result = coordinate(
             admission,
             DelegatedSubtree::from_environment,
-            ReceiveSessionState::create_runtime,
+            || ProjectQuotaLease::from_environment(&options.destination),
             |session, staging, runtime| {
                 let mut command = Command::new(executable);
                 command
@@ -830,10 +836,10 @@ mod receive {
 
     /// Own the lease from before staging creation through tree settlement.
     /// Injection is internal. Neither qualification gate depends on it.
-    fn coordinate<C: Controller, W: io::Write + Send + 'static>(
+    fn coordinate<C: Controller, Q: QuotaLease, W: io::Write + Send + 'static>(
         admission: Admission<'_>,
         acquire: impl FnOnce() -> Result<C, ContainmentError>,
-        prepare_runtime: impl FnOnce() -> io::Result<ReceiveSessionState>,
+        acquire_quota: impl FnOnce() -> Result<Q, QuotaError>,
         launch: impl FnOnce(&C::Session, &ReceiveStaging, &ReceiveSessionState) -> io::Result<Child>,
         terminal: impl Fn() -> io::Result<W>,
         output_limit: usize,
@@ -846,23 +852,46 @@ mod receive {
         let session = lease
             .create()
             .map_err(|_| (BlockReason::BackendFailed, Completion::retained(FAILED)))?;
+        let mut quota = match acquire_quota() {
+            Ok(quota) => quota,
+            Err(_) => {
+                let clean = lease
+                    .cleanup(session)
+                    .and_then(|()| lease.release())
+                    .is_ok();
+                let completion = if clean {
+                    Completion::no_resources(FAILED)
+                } else {
+                    Completion::retained(FAILED)
+                };
+                return Err((BlockReason::PermissionUnavailable, completion));
+            }
+        };
 
         // Prepare both private resources before exec, with retention armed
         // before an untrusted process can ever see either path.
         let resources = ReceiveStaging::create(admission.destination)
             .map_err(|_| BlockReason::DestinationUnavailable)
             .and_then(|staging| {
-                let runtime = prepare_runtime().map_err(|_| BlockReason::PermissionUnavailable)?;
+                quota
+                    .verify_directory(staging.path())
+                    .map_err(|_| BlockReason::PermissionUnavailable)?;
+                let runtime = ReceiveSessionState::create_in(quota.storage_root())
+                    .map_err(|_| BlockReason::PermissionUnavailable)?;
+                quota
+                    .verify_directory(runtime.path())
+                    .map_err(|_| BlockReason::PermissionUnavailable)?;
                 Ok((staging, runtime))
             });
         let (mut staging, mut runtime) = match resources {
             Ok(resources) => resources,
             Err(reason) => {
-                let clean = lease
+                let containment_clean = lease
                     .cleanup(session)
                     .and_then(|()| lease.release())
                     .is_ok();
-                let completion = if clean {
+                let quota_clean = quota.release().is_ok();
+                let completion = if containment_clean && quota_clean {
                     Completion::no_resources(FAILED)
                 } else {
                     Completion::retained(FAILED)
@@ -959,6 +988,12 @@ mod receive {
         {
             return Ok(Completion::retained(run));
         }
+        if quota.revalidate().is_err()
+            || quota.verify_directory(staging.path()).is_err()
+            || quota.verify_directory(runtime.path()).is_err()
+        {
+            return Ok(Completion::retained(run));
+        }
         run = admission.interrupted().unwrap_or(run);
         let eligible = publication_eligible(
             run.0,
@@ -977,6 +1012,21 @@ mod receive {
         }
         let (files, bytes, cleanup) =
             finish_staging(staging, eligible && CRASH_SUPERVISION_QUALIFIED, true);
+        if cleanup != "complete" || quota.revalidate().is_err() {
+            return Ok(Completion::retained(run));
+        }
+        if quota.release().is_err() {
+            return Ok(if files == 0 {
+                Completion::retained(run)
+            } else {
+                Completion {
+                    run: FAILED,
+                    files,
+                    bytes,
+                    cleanup: "incomplete",
+                }
+            });
+        }
         if run.1 == ReceiveState::Completed && (!eligible || cleanup != "complete") {
             run = FAILED;
         }
@@ -1376,6 +1426,10 @@ mod receive {
             stuck: bool,
             cleanup_fails: bool,
             release_fails: bool,
+            quota_acquire_fails: bool,
+            quota_verify_fails: bool,
+            quota_revalidate_fails: bool,
+            quota_release_fails: bool,
             crash: CrashPoint,
         }
 
@@ -1427,6 +1481,56 @@ mod receive {
             }
         }
 
+        struct FixtureQuotaLease<'a> {
+            root: PathBuf,
+            marker: PathBuf,
+            events: &'a std::cell::RefCell<Vec<&'static str>>,
+            scenario: &'a Scenario,
+        }
+
+        impl QuotaLease for FixtureQuotaLease<'_> {
+            fn storage_root(&self) -> &Path {
+                &self.root
+            }
+
+            fn verify_directory(&self, directory: &Path) -> Result<(), QuotaError> {
+                self.events.borrow_mut().push("quota_verify");
+                let contained = std::fs::canonicalize(directory)
+                    .ok()
+                    .zip(std::fs::canonicalize(&self.root).ok())
+                    .is_some_and(|(directory, root)| directory.starts_with(root));
+                if self.scenario.quota_verify_fails || !contained {
+                    Err(QuotaError::ProjectMismatch)
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn revalidate(&self) -> Result<QuotaSnapshot, QuotaError> {
+                self.events.borrow_mut().push("quota_revalidate");
+                if self.scenario.quota_revalidate_fails {
+                    Err(QuotaError::EnforcementUnknown)
+                } else {
+                    Ok(QuotaSnapshot {
+                        hard_bytes: 1024,
+                        used_bytes: 7,
+                        hard_inodes: 16,
+                        used_inodes: 2,
+                        enforcement: true,
+                    })
+                }
+            }
+
+            fn release(&mut self) -> Result<(), QuotaError> {
+                self.events.borrow_mut().push("quota_release");
+                if self.scenario.quota_release_fails {
+                    Err(QuotaError::CleanupFailed)
+                } else {
+                    std::fs::remove_dir(&self.marker).map_err(|_| QuotaError::CleanupFailed)
+                }
+            }
+        }
+
         fn crash_at(selected: CrashPoint, current: CrashPoint) {
             if selected == current {
                 // Exit without unwinding to model abrupt supervisor loss.
@@ -1457,7 +1561,6 @@ mod receive {
             let deadline = origin + Duration::from_secs(30);
             let clock = || if expired.get() { deadline } else { origin };
             let destination = root.join("dest");
-            let runtime = root.join("runtime");
             let events = std::cell::RefCell::new(Vec::new());
             let result = coordinate(
                 Admission {
@@ -1479,8 +1582,18 @@ mod receive {
                     })
                 },
                 || {
-                    events.borrow_mut().push("prepare");
-                    ReceiveSessionState::create_in(&runtime)
+                    events.borrow_mut().push("quota_acquire");
+                    if scenario.quota_acquire_fails {
+                        return Err(QuotaError::QuotaUnavailable);
+                    }
+                    let marker = destination.join("quota-owner");
+                    std::fs::create_dir(&marker).map_err(|_| QuotaError::OwnershipConflict)?;
+                    Ok(FixtureQuotaLease {
+                        root: destination.clone(),
+                        marker,
+                        events: &events,
+                        scenario,
+                    })
                 },
                 |(), staging, runtime| {
                     events.borrow_mut().push("launch");
@@ -1521,37 +1634,59 @@ mod receive {
 
         fn fixture_root() -> tempfile::TempDir {
             let root = tempfile::tempdir().unwrap();
-            std::fs::create_dir(root.path().join("dest")).unwrap();
-            let mut runtime = std::fs::DirBuilder::new();
-            std::os::unix::fs::DirBuilderExt::mode(&mut runtime, 0o700);
-            runtime.create(root.path().join("runtime")).unwrap();
+            let mut destination = std::fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut destination, 0o700);
+            destination.create(root.path().join("dest")).unwrap();
             root
         }
 
         fn private_resource_counts(root: &Path) -> (usize, usize) {
-            (
-                std::fs::read_dir(root.join("dest")).unwrap().count(),
-                std::fs::read_dir(root.join("runtime")).unwrap().count(),
-            )
+            let mut staging = 0;
+            let mut runtime = 0;
+            for entry in std::fs::read_dir(root.join("dest")).unwrap() {
+                let name = entry.unwrap().file_name();
+                let name = name.to_string_lossy();
+                staging += usize::from(name.starts_with(".opencontinuity-airdrop-"));
+                runtime += usize::from(name.starts_with("opencontinuity-airdrop-state-"));
+            }
+            (staging, runtime)
         }
 
         #[test]
-        fn coordinator_success_releases_lease_but_remains_nonpublishable() {
+        fn coordinator_success_retains_quota_reservation_and_remains_nonpublishable() {
             let root = fixture_root();
-            for attempts in 1..=2 {
-                let (completion, events) = fixture_session(root.path(), &Scenario::default());
-                assert_eq!(completion.run, FAILED);
-                assert_eq!(completion.cleanup, "incomplete");
-                assert_eq!(
-                    events,
-                    [
-                        "acquire", "create", "prepare", "launch", "observe", "observe", "cleanup",
-                        "release"
-                    ]
-                );
-                assert!(!root.path().join("owner").exists());
-                assert_eq!(private_resource_counts(root.path()), (attempts, attempts));
-            }
+            let (completion, events) = fixture_session(root.path(), &Scenario::default());
+            assert_eq!(completion.run, FAILED);
+            assert_eq!(completion.cleanup, "incomplete");
+            assert_eq!(
+                events,
+                [
+                    "acquire",
+                    "create",
+                    "quota_acquire",
+                    "quota_verify",
+                    "quota_verify",
+                    "launch",
+                    "observe",
+                    "observe",
+                    "cleanup",
+                    "release",
+                    "quota_revalidate",
+                    "quota_verify",
+                    "quota_verify",
+                ]
+            );
+            assert!(!root.path().join("owner").exists());
+            assert!(root.path().join("dest/quota-owner").exists());
+            assert_eq!(private_resource_counts(root.path()), (1, 1));
+
+            let (retry, retry_events) = fixture_session(root.path(), &Scenario::default());
+            assert_eq!(retry.cleanup, "complete");
+            assert_eq!(
+                retry_events,
+                ["acquire", "create", "quota_acquire", "cleanup", "release"]
+            );
+            assert_eq!(private_resource_counts(root.path()), (1, 1));
         }
 
         #[test]
@@ -1607,10 +1742,80 @@ mod receive {
                 assert_eq!(completion.run.0, reason);
                 assert_eq!(completion.cleanup, "complete");
                 assert_eq!(private_resource_counts(root.path()), (0, 0));
-                assert!(events.ends_with(&["observe", "cleanup", "release"]));
+                assert!(
+                    events
+                        .windows(3)
+                        .any(|events| events == ["observe", "cleanup", "release"])
+                );
+                assert!(events.ends_with(&["quota_revalidate", "quota_release"]));
                 if scenario.placement_fails || scenario.cancel || scenario.expire {
                     assert!(events.contains(&"kill"));
                 }
+            }
+        }
+
+        #[test]
+        fn coordinator_quota_uncertainty_blocks_and_retains_when_needed() {
+            for scenario in [
+                Scenario {
+                    quota_acquire_fails: true,
+                    ..Default::default()
+                },
+                Scenario {
+                    quota_verify_fails: true,
+                    ..Default::default()
+                },
+            ] {
+                let root = fixture_root();
+                let (completion, events) = fixture_session(root.path(), &scenario);
+                assert_eq!(completion.run, FAILED);
+                assert_eq!(completion.cleanup, "complete");
+                assert_eq!(private_resource_counts(root.path()), (0, 0));
+                assert!(!root.path().join("dest/quota-owner").exists());
+                assert!(events.contains(&"quota_acquire"));
+            }
+
+            for (scenario, retained) in [
+                (
+                    Scenario {
+                        script: "exit 7",
+                        quota_revalidate_fails: true,
+                        ..Default::default()
+                    },
+                    (1, 1),
+                ),
+                (
+                    Scenario {
+                        script: "exit 7",
+                        quota_release_fails: true,
+                        ..Default::default()
+                    },
+                    (0, 0),
+                ),
+            ] {
+                let root = fixture_root();
+                let (completion, _) = fixture_session(root.path(), &scenario);
+                assert_eq!(completion.run, FAILED);
+                assert_eq!(completion.cleanup, "incomplete");
+                assert_eq!(private_resource_counts(root.path()), retained);
+                assert!(root.path().join("dest/quota-owner").exists());
+            }
+        }
+
+        #[test]
+        fn coordinator_reuses_quota_after_safe_failed_session() {
+            let root = fixture_root();
+            for _ in 0..2 {
+                let (completion, _) = fixture_session(
+                    root.path(),
+                    &Scenario {
+                        script: "exit 7",
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(completion.cleanup, "complete");
+                assert_eq!(private_resource_counts(root.path()), (0, 0));
+                assert!(!root.path().join("dest/quota-owner").exists());
             }
         }
 
@@ -1628,9 +1833,11 @@ mod receive {
             );
             assert_eq!(completion.run, FAILED);
             assert_eq!(completion.cleanup, "complete");
-            assert!(events.ends_with(&[
-                "observe", "kill", "observe", "observe", "observe", "cleanup", "release"
-            ]));
+            assert!(events.windows(7).any(|events| events
+                == [
+                    "observe", "kill", "observe", "observe", "observe", "cleanup", "release"
+                ]));
+            assert!(events.ends_with(&["quota_revalidate", "quota_release"]));
             assert_eq!(private_resource_counts(root.path()), (0, 0));
         }
 

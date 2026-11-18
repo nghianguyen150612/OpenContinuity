@@ -161,3 +161,32 @@ Hosted Rust, Qt/QML and Swift/CryptoKit/watchOS results are tracked on the push
 and PR checks for the P019D commit. See the
 [P019D lifecycle and crash supervision report](research/P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md)
 for the kernel plan and placement limitation.
+
+## P019E hard aggregate disk quota foundation
+
+P019E adds a Linux XFS/ext4 project-quota capability and exclusive reservation
+to the disabled internal lifecycle. It verifies the exact destination,
+project inheritance, hard byte/inode limits and observable enforcement before
+storage creation, accounts transient TLS state under the same root, and
+revalidates quota identity after writer settlement. P019A's atomic bundle
+rename remains same-filesystem and same-project. There is no userspace-only
+fallback. Production containment and crash-supervision gates remain literal
+false constants, and Qt Receive remains disabled.
+
+The deterministic tests cover quota capability, identity, inheritance, limits,
+capacity, ownership, retention, release and lifecycle retry policy through the
+production coordinator. They are mock policy evidence only. The opt-in kernel
+test requires a disposable, exclusive, externally provisioned project-quota
+root; `/workspace` is overlayfs on this host, so **KERNEL NOT RUN**.
+
+Local P019E validation on Rust 1.85.0 and Python 3.12.14: formatting PASS;
+warnings-denied Clippy PASS; workspace build PASS; whitespace PASS; **264 Rust
+tests passed / 2 ignored**; and **55 Python tests passed**. The ignored tests
+are the real cgroup and real project-quota integrations. Qt 6.4.2/QML and
+Swift/CryptoKit/watchOS toolchains are unavailable locally and remain hosted
+CI gates. Exact final-head workflow URLs are recorded after hosted validation.
+
+Project-quota provisioning, alternate-path write confinement, real cgroup
+placement, external crash supervision, closed writer ingress and commit-time
+consent remain independent activation blockers. See
+[P019E hard quota foundation](research/P019E_HARD_DISK_QUOTA_FOUNDATION.md).

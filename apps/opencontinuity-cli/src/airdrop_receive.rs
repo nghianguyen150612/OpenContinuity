@@ -52,16 +52,6 @@ impl ReceiveSessionState {
     pub fn retain_until_quiescent(&mut self) {
         self.keep = true;
     }
-    pub fn create_runtime() -> io::Result<Self> {
-        let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "private runtime directory unavailable",
-            )
-        })?;
-        Self::create_in(Path::new(&runtime))
-    }
-
     pub(super) fn create_in(directory: &Path) -> io::Result<Self> {
         let directory_meta = fs::symlink_metadata(directory)?;
         if !directory_meta.is_dir() || directory_meta.file_type().is_symlink() {

@@ -222,3 +222,23 @@ owned subtree. A same-UID watchdog is exposed to signals, control-file access
 and IPC interference. Process containment also assumes the backend cannot
 delegate writes to an external process. Hard aggregate disk quota remains an
 independent blocker. See [P019D lifecycle and crash supervision](research/P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).
+
+## P019E hard quota foundation
+
+The disabled internal lifecycle now requires an exclusive XFS or ext4 project-
+quota lease before it creates staging or per-session TLS state. It verifies an
+administrator-provisioned project ID, inheritance and exact hard block/inode
+limits, keeps an identity-pinned owner reservation, and revalidates after
+writer settlement. The same-project destination preserves P019A's single
+no-replace directory rename and keeps published allocation charged. Unknown
+enforcement, exhausted capacity, changed identity or failed release is
+fail-closed; no userspace counter fallback exists.
+
+This is an offline foundation, not enforcement qualification. The current
+overlayfs host cannot run its ignored kernel suite. Project quota does not
+confine a compromised same-UID backend from other writable paths, inherited
+descriptors, IPC writers or filesystems, and it does not cap all global
+filesystem metadata. Trusted filesystem provisioning, exclusive project-ID
+management and a launcher that closes every alternate write path are required.
+Containment, external crash supervision, commit-time consent and closed writer
+ingress also remain blockers. See [P019E hard disk quota foundation](research/P019E_HARD_DISK_QUOTA_FOUNDATION.md).

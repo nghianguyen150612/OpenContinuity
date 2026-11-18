@@ -121,3 +121,21 @@ and private data cleanup. The parent and all higher ancestor controls must be
 protected against migration. A trusted external launcher and a manager that
 can kill the subtree on supervisor loss are still required. See
 [P019D lifecycle and crash supervision](P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).
+
+## P019E storage boundary update
+
+The internal coordinator now composes a quota lease between containment-session
+creation and private storage allocation. The concrete Linux adapter accepts
+only an exact, owner-private destination backed by administrator-provisioned
+XFS or ext4 project quota. It verifies project inheritance and exact hard block
+and inode limits, moves transient TLS state under that accounting root, pins an
+exclusive session marker by descriptor identity, and revalidates after tree
+settlement. Storage uncertainty retains data and blocks publication.
+
+This does not make the backend sandboxed. The future trusted launcher must
+place Owly in the qualified cgroup and prevent writes through other mounts,
+paths, descriptors and services. The destination/project arrangement retains
+the P019A same-filesystem atomic bundle rename; a separate staging mount or
+copy fallback is unsupported. Kernel quota integration is NOT RUN on the
+current overlayfs host. See
+[P019E hard quota foundation](P019E_HARD_DISK_QUOTA_FOUNDATION.md).

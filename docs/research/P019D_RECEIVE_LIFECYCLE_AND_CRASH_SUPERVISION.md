@@ -166,6 +166,16 @@ aggregate scanner polls usage and allows temporary disk consumption beyond the
 limit between scans. Receive activation also requires real kernel and manager
 qualification and completion of the publication commit boundary above.
 
+P019E adds an inactive project-quota lease to this coordinator. Staging and
+runtime state are created only after an externally provisioned XFS/ext4 hard
+block/inode limit is verified, and quota identity is checked again after
+writer settlement. This removes polling as the proposed storage boundary but
+does not qualify kernel enforcement on the current overlayfs host or prevent
+the backend from using alternate writable paths. See
+[P019E hard quota foundation](P019E_HARD_DISK_QUOTA_FOUNDATION.md). The trusted
+launcher, crash guardian, write-confinement and commit-boundary requirements in
+this document remain unchanged.
+
 `authorization: never_evaluated` and `physicalQualification: not_qualified`.
 Physical RTL8852BE AWDL and iPhone 13 AirDrop are NOT RUN. Watch SE 2 W0–W6 is
 NOT RUN/BLOCKED. Native Apple Auto Unlock is NO-GO.

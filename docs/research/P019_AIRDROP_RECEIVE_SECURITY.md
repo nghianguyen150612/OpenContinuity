@@ -126,3 +126,23 @@ both staging and runtime identity if settlement or cleanup is uncertain.
 Publication also requires crash supervision qualification, which remains
 unavailable. Production Receive and Qt Receive stay disabled. See
 [P019D lifecycle and crash supervision](P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).
+
+## P019E quota update
+
+The inactive coordinator now acquires an externally provisioned XFS/ext4
+project-quota lease before creating staging or runtime TLS identity. The quota
+root must be the exact private destination and must expose the configured
+inherited project ID plus exact hard block and inode limits. Staging, nested
+Owly temporary data, retained failures and a published bundle therefore stay
+charged to one project. The lease is revalidated after recursive writer
+quiescence and before reservation release. Any unknown or changed state blocks
+publication and there is no scanner-only fallback.
+
+Atomic publication remains one same-filesystem, same-project
+`RENAME_NOREPLACE`; cross-mount or cross-project failure is not converted into
+a copy. The current overlayfs host did not run the ignored kernel enforcement
+test, so actual EDQUOT behavior is NOT RUN. A project quota cannot stop Owly
+from writing through another path, inherited descriptor or service. Trusted
+write confinement, containment and crash supervision remain independent
+activation blockers. See
+[P019E quota foundation](P019E_HARD_DISK_QUOTA_FOUNDATION.md).
