@@ -951,15 +951,20 @@ mod tests {
     #[test]
     #[ignore = "requires OPENCONTINUITY_RUN_QUOTA_INTEGRATION=1 and a disposable delegated quota root"]
     fn kernel_project_quota_atomic_publication_and_accounting() {
-        if std::env::var_os("OPENCONTINUITY_RUN_QUOTA_INTEGRATION").as_deref()
-            != Some(std::ffi::OsStr::new("1"))
-        {
-            eprintln!("SKIP: explicit project-quota integration opt-in is absent");
-            return;
-        }
+        assert_eq!(
+            std::env::var_os("OPENCONTINUITY_RUN_QUOTA_INTEGRATION").as_deref(),
+            Some(std::ffi::OsStr::new("1")),
+            "explicit opt-in required"
+        );
         let destination =
             PathBuf::from(required_environment("OPENCONTINUITY_AIRDROP_QUOTA_ROOT").unwrap());
         let mut lease = ProjectQuotaLease::from_environment(&destination).unwrap();
+        // Never run the qualification allocation loops beside operator data.
+        assert!(
+            fs::read_dir(&destination)
+                .unwrap()
+                .all(|entry| { entry.unwrap().file_name() == OWNER_DIRECTORY })
+        );
         let before = lease.revalidate().unwrap();
         assert!(before.hard_bytes <= 64 * 1024 * 1024);
         assert!(before.hard_inodes <= 4096);
@@ -1012,6 +1017,45 @@ mod tests {
         let fixture = destination.join(".opencontinuity-quota-kernel-fixture");
         let mut builder = fs::DirBuilder::new();
         builder.mode(0o700).create(&fixture).unwrap();
+
+        // Sparse length is not allocation. Open-unlinked data must remain
+        // charged until close even though a directory scanner cannot see it.
+        let sparse_path = fixture.join("sparse-open-unlinked");
+        let baseline = lease.revalidate().unwrap();
+        let mut sparse = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&sparse_path)
+            .unwrap();
+        sparse.set_len(128 * 1024 * 1024).unwrap();
+        assert_eq!(sparse.metadata().unwrap().blocks(), 0);
+        sparse.write_all(&[0x5a; 64 * 1024]).unwrap();
+        sparse.sync_all().unwrap();
+        let blocks = sparse.metadata().unwrap().blocks() * 512;
+        assert!(blocks >= 64 * 1024);
+        fs::remove_file(&sparse_path).unwrap();
+        let unlinked = lease.revalidate().unwrap();
+        assert!(unlinked.used_bytes >= baseline.used_bytes + blocks);
+        assert!(unlinked.used_inodes > baseline.used_inodes);
+        assert!(!sparse_path.exists());
+        drop(sparse);
+
+        // A deliberately failed session retains its allocation under quota.
+        let mut retained = crate::airdrop::storage::ReceiveStaging::create(&destination).unwrap();
+        retained.retain_until_quiescent();
+        let retained_path = fs::canonicalize(retained.path()).unwrap();
+        fs::write(retained_path.join("incomplete"), [0x33; 64 * 1024]).unwrap();
+        File::open(retained_path.join("incomplete"))
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        let charged = lease.revalidate().unwrap();
+        drop(retained);
+        assert!(retained_path.exists());
+        assert!(lease.revalidate().unwrap().used_bytes >= charged.used_bytes);
+        fs::remove_dir_all(retained_path).unwrap();
+
         let available = lease
             .revalidate()
             .unwrap()
@@ -1036,7 +1080,7 @@ mod tests {
                         Ok(0) => panic!("quota fixture write made no progress"),
                         Ok(count) => written += count as u64,
                         Err(error) => {
-                            errors.lock().unwrap().push(error.raw_os_error());
+                            errors.lock().unwrap().push((error.raw_os_error(), written));
                             return;
                         }
                     }
@@ -1052,10 +1096,18 @@ mod tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|error| *error == Some(libc::EDQUOT))
+                .any(|(error, _)| *error == Some(libc::EDQUOT))
         );
         let exhausted = lease.revalidate().unwrap();
         assert!(exhausted.used_bytes <= exhausted.hard_bytes);
+        let allocated_blocks: u64 = fs::read_dir(&fixture)
+            .unwrap()
+            .map(|entry| entry.unwrap().metadata().unwrap().blocks() * 512)
+            .sum();
+        let logical_written: u64 = errors.lock().unwrap().iter().map(|(_, bytes)| bytes).sum();
+        assert!(logical_written > 0 && allocated_blocks > 0);
+        assert!(allocated_blocks <= exhausted.hard_bytes);
+        assert!(exhausted.hard_bytes - exhausted.used_bytes < 2 * 1024 * 1024);
         for entry in fs::read_dir(&fixture).unwrap() {
             fs::remove_file(entry.unwrap().path()).unwrap();
         }
@@ -1078,10 +1130,21 @@ mod tests {
             }
         }
         assert_eq!(inode_error, Some(libc::EDQUOT));
+        let inode_exhausted = lease.revalidate().unwrap();
+        assert!(inode_exhausted.used_inodes <= inode_exhausted.hard_inodes);
+        assert!(inode_exhausted.hard_inodes - inode_exhausted.used_inodes <= 1);
+        println!(
+            "P019F_QUOTA_COUNTS {} {} {} {}",
+            exhausted.hard_bytes,
+            exhausted.used_bytes,
+            inode_exhausted.hard_inodes,
+            inode_exhausted.used_inodes
+        );
         for entry in fs::read_dir(&fixture).unwrap() {
             fs::remove_file(entry.unwrap().path()).unwrap();
         }
         fs::remove_dir(fixture).unwrap();
         lease.release().unwrap();
+        println!("P019F_KERNEL_ASSERTIONS_COMPLETE quota");
     }
 }

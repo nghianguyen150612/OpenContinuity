@@ -246,3 +246,21 @@ ingress also remain blockers. See [P019E hard disk quota foundation](research/P0
 Only XFS currently supplies the adapter's explicit enforcement flags. ext4
 accounting is readable but capability acquisition fails with enforcement
 unknown; neither filesystem has real-kernel qualification here.
+
+## P019F trusted deployment qualification
+
+The qualification harness runs only fixed ignored test identities on explicitly
+provisioned disposable resources, with current-boot, device/inode and distinct
+credential checks. Its default preflight is read-only. A root-owned manifest is
+an assertion by trusted provisioning, not proof against administrator changes
+or external writer ingress. Public reports cannot promote mock results into
+kernel, production or physical qualification; private bounded logs remain local.
+
+The launcher/guardian protocol validator checks identity binding, manager epochs,
+replay, seal-before-commit, consent/deadline and retention on uncertainty. It is
+offline and does not authenticate an OS peer or implement a privileged manager.
+Actual enforcement requires a separate launcher, isolated backend credentials,
+closed writable descriptors/IPC and an external system manager on supervisor or
+guardian loss. The inactive coordinator still lacks an ingress seal held across
+validation/rename and commit-time consent recheck. See
+[P019F qualification](research/P019F_TRUSTED_DEPLOYMENT_AND_KERNEL_QUALIFICATION.md).

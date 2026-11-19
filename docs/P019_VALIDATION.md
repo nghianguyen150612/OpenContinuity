@@ -196,3 +196,28 @@ Final adapter review keeps ext4 capability unavailable: generic quota limits
 and accounting do not independently prove enforcement. XFS is the implemented
 enforcement candidate; its real-kernel qualification remains NOT RUN. A
 regression also verifies runtime creation through the pinned quota descriptor.
+
+## P019F deployment contract and qualification harness
+
+P019F adds a non-production manager/launcher ownership contract, a read-only
+host preflight and opt-in disposable-host runner. It expands the ignored XFS
+test with sparse/open-unlinked accounting, retained allocation checks and
+exhaustion accounting assertions. Reports distinguish MOCK_PASS,
+HOST_PREFLIGHT_PASS, KERNEL_PASS, NOT_RUN, BLOCKED and FAILED, tied to exact
+commit and sanitized host configuration. The runner never invokes Receive or
+provisions host resources. All production gates remain false.
+
+The current host preflight is BLOCKED. Both kernel tests are NOT_RUN. Successful
+trusted placement, guardian crash/restart, write confinement, cross-project/mount
+publication and quota configuration-change tests require additional trusted
+host adapters and remain BLOCKED. P019F is PARTIAL; its offline contracts do
+not qualify enforcement. Local results and final-head hosted workflows are
+recorded in Draft PR #20. See the exact seven-boundary matrix in
+[P019F qualification](research/P019F_TRUSTED_DEPLOYMENT_AND_KERNEL_QUALIFICATION.md).
+
+Local P019F checks: formatting, warnings-denied Clippy, workspace build and
+whitespace PASS; **265 Rust tests passed / 2 ignored** and **76 Python tests
+passed** (21 new contract/harness tests). `--mock` emits MOCK_PASS only for
+the offline suite, host preflight BLOCKED and kernel NOT_RUN. Qt/QML and
+Swift/CryptoKit/watchOS remain hosted gates; those toolchains are unavailable
+on this host. No real quota, cgroup, guardian or AirDrop case ran.

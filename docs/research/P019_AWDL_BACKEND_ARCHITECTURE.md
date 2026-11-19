@@ -143,3 +143,14 @@ current overlayfs host. See
 The adapter recognizes ext4 for accounting but rejects capability acquisition
 because enforcement is unknown. Only XFS exposes the enforcement flags used by
 this foundation, and its kernel behavior remains unqualified here.
+
+## P019F trusted deployment contract
+
+The offline qualification contract separates a system manager, privileged
+pre-exec launcher, independently credentialed guardian, unprivileged supervisor
+and restricted backend. It binds pinned resources and supervisor identity to
+one session/manager epoch, rejects replay, and requires a persistent writer
+ingress seal and consent revalidation at commit. The new harness invokes only
+fixed kernel tests on explicitly provisioned disposable resources. No trusted
+manager or sandbox is shipped; production Receive remains disabled. See
+[P019F deployment and kernel qualification](P019F_TRUSTED_DEPLOYMENT_AND_KERNEL_QUALIFICATION.md).

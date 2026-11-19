@@ -1206,6 +1206,7 @@ mod tests {
             placement.unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
+        println!("P019F_KERNEL_ASSERTIONS_COMPLETE placement_rejection");
     }
 }
 

@@ -149,3 +149,15 @@ activation blockers. See
 
 XFS is the implemented enforcement candidate. ext4 accounting does not prove
 enforcement and remains fail-closed pending a qualified status mechanism.
+
+## P019F qualification boundaries
+
+The new offline launcher/guardian contract tests explicit resource ownership,
+manager epochs, closed writer ingress, commit-time consent and retention after
+uncertainty. These observations do not create OS authority. A real separately
+credentialed manager must hold the seal across final validation and atomic
+rename; the existing inactive coordinator's release-before-finalize and
+pre-finalize consent checks do not establish that guarantee. Both production
+gates therefore remain false. The disposable-host runner preserves kernel
+NOT_RUN and BLOCKED cases separately from mock results. See
+[P019F qualification](P019F_TRUSTED_DEPLOYMENT_AND_KERNEL_QUALIFICATION.md).
