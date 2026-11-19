@@ -9,8 +9,10 @@ literal false constants, Qt Receive remains disabled, and no live Receive path
 can reach this code. The result is **PARTIAL**: deterministic policy tests pass,
 but kernel quota enforcement and backend write confinement are not qualified.
 
-The supported candidate is an administrator-provisioned, exclusive XFS or
-ext4 project-quota destination. The operator-selected destination itself must
+The implemented enforcement candidate is an administrator-provisioned,
+exclusive XFS project-quota destination. ext4 is evaluated and its accounting
+can be read, but capability acquisition rejects it as enforcement unknown.
+The operator-selected destination itself must
 be the configured quota root. Staging, Owly's nested temporary directories,
 per-session TLS state, retained failures and a published bundle therefore stay
 on the same filesystem and project. OpenContinuity does not mount a filesystem,
@@ -51,7 +53,8 @@ not cap aggregate allocated storage.
 
 ## Selected kernel mechanism
 
-The adapter accepts only XFS and ext4. It opens every absolute path one
+The adapter recognizes only XFS and ext4 and accepts enforcement evidence only
+for XFS. It opens every absolute path one
 component at a time with `O_DIRECTORY|O_NOFOLLOW`, compares destination and
 configured-root device/inode identities, and requires an owner-only root. It
 then verifies `FS_IOC_FSGETXATTR` reports the exact nonzero project ID and
@@ -61,8 +64,11 @@ For XFS, `quotactl_fd(Q_XGETQSTATV)` must report project accounting and
 enforcement, and `Q_XGETQUOTA` must report the configured project and exact
 hard block and inode limits. XFS block units are converted from 512-byte basic
 blocks. For ext4, the generic project `Q_GETQUOTA` query must succeed with both
-hard-limit fields valid and exact; generic quota block units are 1024 bytes.
-Failure, permission denial, unsupported ABI, zero/changed limits, unknown XFS
+hard-limit fields valid; generic quota block units are 1024 bytes. That query
+does not independently establish active enforcement, so the ext4 snapshot
+always records enforcement unknown and cannot acquire a lease. ext4 support
+requires a separately verified status mechanism before qualification.
+Failure, permission denial, unsupported ABI, zero/changed limits, unknown
 enforcement, usage beyond a hard limit, or an initially exhausted limit fails
 closed. These read-only queries may themselves require privileges supplied by
 the future trusted manager. Such privileges must never be passed to Owly.
@@ -173,6 +179,10 @@ qualification run must additionally record sparse allocation, partial writes,
 open-unlinked allocation, crash retention, restart/stale reservation behavior,
 cross-project and cross-mount rename rejection, and cleanup failure on the
 target kernel/filesystem combination.
+
+Local validation passed 265 Rust tests with two integrations ignored, 55 Python
+tests, formatting, warnings-denied Clippy, build and whitespace checks. Qt/QML
+and Swift/watchOS validation requires hosted CI.
 
 This host is Linux 6.18.57, uid 1000, with `/workspace` on overlayfs. It is not
 an XFS/ext4 project-quota test root and has no trusted provisioning. The opt-in

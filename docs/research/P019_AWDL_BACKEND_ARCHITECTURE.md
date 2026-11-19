@@ -139,3 +139,7 @@ the P019A same-filesystem atomic bundle rename; a separate staging mount or
 copy fallback is unsupported. Kernel quota integration is NOT RUN on the
 current overlayfs host. See
 [P019E hard quota foundation](P019E_HARD_DISK_QUOTA_FOUNDATION.md).
+
+The adapter recognizes ext4 for accounting but rejects capability acquisition
+because enforcement is unknown. Only XFS exposes the enforcement flags used by
+this foundation, and its kernel behavior remains unqualified here.

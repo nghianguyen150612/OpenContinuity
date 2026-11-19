@@ -246,7 +246,9 @@ impl ProjectQuotaLease {
             return Err(error);
         }
         let owner_identity = file_identity(&owner).map_err(|_| QuotaError::ObservationFailed)?;
-        let root_path = PathBuf::from(format!("/proc/self/fd/{}", root.as_raw_fd()));
+        // The final component must be a directory rather than the procfs
+        // magic link: runtime creation deliberately uses symlink_metadata.
+        let root_path = PathBuf::from(format!("/proc/self/fd/{}/.", root.as_raw_fd()));
         Ok(Self {
             root,
             root_path,
@@ -536,6 +538,10 @@ fn ext4_quota(root: &File, project_id: u32) -> Result<QuotaSnapshot, QuotaError>
         project_id,
         &mut quota,
     )?;
+    ext4_snapshot(quota)
+}
+
+fn ext4_snapshot(quota: GenericDiskQuota) -> Result<QuotaSnapshot, QuotaError> {
     if quota.valid & (QIF_BLIMITS | QIF_ILIMITS) != QIF_BLIMITS | QIF_ILIMITS {
         return Err(QuotaError::EnforcementUnknown);
     }
@@ -547,7 +553,10 @@ fn ext4_quota(root: &File, project_id: u32) -> Result<QuotaSnapshot, QuotaError>
         used_bytes: quota.current_space,
         hard_inodes: quota.inode_hard_limit,
         used_inodes: quota.current_inodes,
-        enforcement: true,
+        // Q_GETQUOTA exposes limits/accounting, not an independent active
+        // enforcement flag. Until a trusted ext4 status adapter is qualified,
+        // a successful read must not become a hard-quota capability.
+        enforcement: false,
     })
 }
 
@@ -837,6 +846,21 @@ mod tests {
     }
 
     #[test]
+    fn ext4_accounting_alone_never_proves_enforcement() {
+        let snapshot = ext4_snapshot(GenericDiskQuota {
+            block_hard_limit: CONFIG.hard_bytes / 1024,
+            inode_hard_limit: CONFIG.hard_inodes,
+            valid: QIF_BLIMITS | QIF_ILIMITS,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            validate_snapshot(snapshot, CONFIG, true),
+            Err(QuotaError::EnforcementUnknown)
+        );
+    }
+
+    #[test]
     fn requires_private_exact_destination_and_exclusive_owner() {
         let outer = private_root();
         let root = root_path(&outer);
@@ -869,6 +893,11 @@ mod tests {
         let root = root_path(&outer);
         for _ in 0..2 {
             let mut lease = open_fake(&root, FakeState::default()).unwrap();
+            let runtime =
+                crate::airdrop::storage::ReceiveSessionState::create_in(lease.storage_root())
+                    .unwrap();
+            lease.verify_directory(runtime.path()).unwrap();
+            runtime.discard().unwrap();
             let child = root.join("child");
             fs::create_dir(&child).unwrap();
             assert_eq!(lease.verify_directory(&child), Ok(()));

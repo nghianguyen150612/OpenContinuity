@@ -146,3 +146,6 @@ from writing through another path, inherited descriptor or service. Trusted
 write confinement, containment and crash supervision remain independent
 activation blockers. See
 [P019E quota foundation](P019E_HARD_DISK_QUOTA_FOUNDATION.md).
+
+XFS is the implemented enforcement candidate. ext4 accounting does not prove
+enforcement and remains fail-closed pending a qualified status mechanism.

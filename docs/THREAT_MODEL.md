@@ -242,3 +242,7 @@ filesystem metadata. Trusted filesystem provisioning, exclusive project-ID
 management and a launcher that closes every alternate write path are required.
 Containment, external crash supervision, commit-time consent and closed writer
 ingress also remain blockers. See [P019E hard disk quota foundation](research/P019E_HARD_DISK_QUOTA_FOUNDATION.md).
+
+Only XFS currently supplies the adapter's explicit enforcement flags. ext4
+accounting is readable but capability acquisition fails with enforcement
+unknown; neither filesystem has real-kernel qualification here.
