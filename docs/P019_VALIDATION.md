@@ -267,3 +267,42 @@ configuration or live Owly Receive was used. `authorization:
 never_evaluated`, `physicalQualification: not_qualified`, RTL8852BE AWDL / iPhone
 13 AirDrop NOT RUN, Watch SE 2 W0–W6 NOT RUN/BLOCKED, Native Apple Auto Unlock
 NO-GO.
+
+### P019G-R1 hosted guardian startup failure
+
+Both final-head Rust jobs at the original P019G SHA failed
+`trusted_manager::tests::guardian_observes_supervisor_death_and_retains_reservation`
+before readiness. The error provenance showed the failure at the strict
+`parent_directory_mode` check. The fixture used `tempfile::tempdir()` with its
+default mode, which follows the ambient umask. The hosted runner's less
+restrictive umask left group/other permission bits set, while this local
+workspace's `0077` umask had hidden the fixture defect. Re-running locally with
+`umask 0022` reproduced the same failure and operation.
+
+The unit and integration fixtures now request mode `0700` when creating their
+temporary parent directories. Production owner and mode checks are unchanged.
+Sanitized manager I/O errors retain the failing operation, `ErrorKind`, and
+errno where present without printing paths or protocol identities. Readiness
+still occurs only after marker creation, pidfd open, socket bind, socket mode,
+and nonblocking configuration succeed.
+
+On Debian 13 / Linux 6.18.57 with `umask 0022`, the targeted guardian test and
+both real-process manager integration tests pass. The targeted test passed 20
+isolated repetitions; the normal parallel workspace suite passed 279 tests / 2
+ignored. Formatting, warnings-denied Clippy, workspace build, 76 Python tests,
+and `git diff --check` also passed.
+
+All six hosted jobs passed at implementation SHA
+`eacfa5d78eb4f928b93a0c8949f512e15ba3d5f0`:
+
+- [Push CI](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/44700575957)
+- [Draft PR #20 CI](https://github.com/nghianguyen150612/OpenContinuity/actions/runs/44700582529)
+
+Both hosted Rust Tests steps include the guardian test passing. P019G remains
+**PARTIAL**. Kernel cgroup and XFS qualification remain NOT_RUN; sandbox and
+production containment remain BLOCKED. Production Receive stays disabled,
+`writer_containment_available()` and `CRASH_SUPERVISION_QUALIFIED` remain
+literal false, and no radio or live Receive was used. `authorization:
+never_evaluated`, `physicalQualification: not_qualified`, RTL8852BE/iPhone 13
+AirDrop NOT RUN, Watch SE 2 W0–W6 NOT RUN/BLOCKED, Native Apple Auto Unlock
+NO-GO.
