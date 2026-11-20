@@ -175,6 +175,14 @@ missing runner log means this is a regression improvement, not a confirmed
 root cause for the historical failure. Current full Rust checks must pass on
 the new commit before the issue is considered closed.
 
+An intermediate hosted run of the new P019G manager prototype failed in
+`guardian_observes_supervisor_death_and_retains_reservation` at its initial
+two-second marker poll, before the test killed the supervisor or observed the
+pidfd. The test was scheduling dependent. It now waits on a bounded explicit
+readiness channel emitted only after the marker, pidfd, and socket are set up.
+The targeted test and complete local Rust workspace pass with that change;
+the exact-head hosted rerun is pending.
+
 ## Qualification status
 
 | Boundary | P019G result |

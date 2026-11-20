@@ -109,6 +109,16 @@ pub fn serve(
     supervisor_uid: libc::uid_t,
     identity: Identity,
 ) -> Result<(), ManagerError> {
+    serve_with_ready(socket, supervisor_pid, supervisor_uid, identity, || {})
+}
+
+fn serve_with_ready(
+    socket: &Path,
+    supervisor_pid: libc::pid_t,
+    supervisor_uid: libc::uid_t,
+    identity: Identity,
+    ready: impl FnOnce(),
+) -> Result<(), ManagerError> {
     let parent = socket.parent().ok_or(ManagerError::Io)?;
     let metadata = std::fs::metadata(parent).map_err(|_| ManagerError::Io)?;
     if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
@@ -134,6 +144,7 @@ pub fn serve(
     listener
         .set_nonblocking(true)
         .map_err(|_| ManagerError::Io)?;
+    ready();
     let mut expected_sequence = 1_u64;
     loop {
         if pidfd.exited().map_err(|_| ManagerError::Io)? {
@@ -401,20 +412,29 @@ mod tests {
         let supervisor_pid = supervisor.id() as libc::pid_t;
         let identity = identity(9);
         let server_socket = socket.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let server = std::thread::spawn(move || {
-            serve(
+            serve_with_ready(
                 &server_socket,
                 supervisor_pid,
                 unsafe { libc::geteuid() },
                 identity,
+                || {
+                    ready_tx.send(()).unwrap();
+                },
             )
         });
         let marker = socket.with_extension("p019g-reserved");
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::yield_now();
+        if let Err(startup_error) = ready_rx.recv_timeout(Duration::from_secs(5)) {
+            supervisor.kill().unwrap();
+            let _ = supervisor.wait();
+            let server_result = server.join().unwrap();
+            panic!("guardian startup failed: {startup_error}; {server_result:?}");
         }
-        assert!(marker.exists());
+        assert!(
+            marker.exists(),
+            "ready guardian must retain its reservation"
+        );
         supervisor.kill().unwrap();
         let _ = supervisor.wait();
         assert_eq!(server.join().unwrap(), Err(ManagerError::SupervisorExited));
