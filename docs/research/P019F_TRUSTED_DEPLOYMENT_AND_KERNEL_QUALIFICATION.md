@@ -42,6 +42,10 @@ transitions:
 
 These findings cannot reach publication under the two false production gates.
 P019F models the missing contract without treating its booleans as OS proof.
+P019G later corrects the offline coordinator's release-before-finalize and
+commit-time consent gaps; it does not change the missing trusted-manager,
+placement, sandbox or kernel-qualification blockers. See
+[P019G](P019G_TRUSTED_MANAGER_AND_PUBLICATION_BOUNDARY.md).
 
 ## Concrete trusted-host design
 
@@ -232,7 +236,7 @@ cannot qualify containment, quota, physical RF or Apple interoperability.
 | Delegated cgroup enforcement | Existing pinned controller and rejection test runner | MOCK_PASS | NOT_RUN | Successful trusted placement, descendant/escape/kill tests |
 | XFS project quota | Existing adapter; expanded allocation test and runner | MOCK_PASS | NOT_RUN | Disposable XFS execution; short-write/cross-boundary/config-change cases |
 | Backend write confinement | Contract and deployment design | MOCK_PASS (policy only) | NOT_RUN | Enforced namespace/UID/IPC/descriptor sandbox |
-| Publication commit boundary | Existing atomic primitive; offline seal/commit policy | MOCK_PASS | NOT_RUN | Authority held sealed through rename and commit-time consent |
+| Publication commit boundary | Existing atomic primitive; offline seal/commit policy | MOCK_PASS | NOT_RUN | Superseded by P019G lease-held finalization; trusted authority remains absent |
 | Physical AirDrop interoperability | No live Receive | NOT_RUN | NOT_RUN | RTL8852BE/iPhone testing after security qualification |
 
 Current host: Linux 6.18.57, uid 1000, workspace overlayfs, visible cgroup v2,

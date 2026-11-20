@@ -161,3 +161,15 @@ pre-finalize consent checks do not establish that guarantee. Both production
 gates therefore remain false. The disposable-host runner preserves kernel
 NOT_RUN and BLOCKED cases separately from mock results. See
 [P019F qualification](P019F_TRUSTED_DEPLOYMENT_AND_KERNEL_QUALIFICATION.md).
+
+## P019G publication and manager update
+
+The inactive coordinator now holds its containment and project-quota lease
+objects through final scanning and each no-overwrite atomic rename attempt.
+Commit authorization is rechecked after staging work, with cancellation and
+commit admission serialized by an atomic gate. A rootless manager prototype
+adds real SO_PEERCRED authentication and pidfd process-lifetime observation.
+Neither change supplies an active external trusted authority, real cgroup
+placement or filesystem/IPC sandbox. Production gates remain false and Receive
+remains disabled. See
+[P019G](P019G_TRUSTED_MANAGER_AND_PUBLICATION_BOUNDARY.md).

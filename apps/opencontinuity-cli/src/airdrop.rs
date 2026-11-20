@@ -700,9 +700,19 @@ mod receive {
             );
         };
         let cancelled = Arc::new(AtomicBool::new(false));
+        let commit_gate = Arc::new(CommitGate::default());
         let mut signals = CancelSignals(Vec::new());
         for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
-            match signal_hook::flag::register(signal, cancelled.clone()) {
+            let cancelled = cancelled.clone();
+            let commit_gate = commit_gate.clone();
+            // SAFETY: the handler performs only lock-free AtomicBool/AtomicU8
+            // operations, which are signal-safe on the required Linux target.
+            match unsafe {
+                signal_hook::low_level::register(signal, move || {
+                    commit_gate.revoke();
+                    cancelled.store(true, Ordering::SeqCst);
+                })
+            } {
                 Ok(id) => signals.0.push(id),
                 Err(_) => {
                     return print_blocked(
@@ -716,6 +726,8 @@ mod receive {
         let admission = Admission {
             destination: &options.destination,
             cancelled: &cancelled,
+            commit_gate: &commit_gate,
+            consent_valid: options.consent,
             deadline: Instant::now() + Duration::from_secs(options.duration_seconds.into()),
             now: &Instant::now,
         };
@@ -770,13 +782,15 @@ mod receive {
     struct Admission<'a> {
         destination: &'a Path,
         cancelled: &'a AtomicBool,
+        commit_gate: &'a CommitGate,
+        consent_valid: bool,
         deadline: Instant,
         now: &'a dyn Fn() -> Instant,
     }
 
     impl Admission<'_> {
         fn interrupted(&self) -> Option<BackendRun> {
-            if self.cancelled.load(Ordering::Relaxed) {
+            if self.cancelled.load(Ordering::SeqCst) || self.commit_gate.is_revoked() {
                 Some((
                     EndReason::Cancelled,
                     ReceiveState::Cancelled,
@@ -802,6 +816,104 @@ mod receive {
     );
     const CRASH_SUPERVISION_QUALIFIED: bool = false;
     const STOP_TIMEOUT: Duration = Duration::from_secs(2);
+
+    // Cancellation and commit admission share one atomic state. A signal that
+    // wins before admission closes every attempt; once RENAME_NOREPLACE has
+    // succeeded, publication wins and a later signal cannot undo the rename.
+    const COMMIT_OPEN: u8 = 0;
+    const COMMIT_ADMITTED: u8 = 1;
+    const COMMIT_REVOKED: u8 = 2;
+    const COMMIT_DONE: u8 = 3;
+
+    #[derive(Default)]
+    struct CommitGate(std::sync::atomic::AtomicU8);
+
+    impl CommitGate {
+        fn revoke(&self) {
+            loop {
+                let state = self.0.load(Ordering::SeqCst);
+                if matches!(state, COMMIT_REVOKED | COMMIT_DONE) {
+                    return;
+                }
+                if self
+                    .0
+                    .compare_exchange(state, COMMIT_REVOKED, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+        }
+
+        fn is_revoked(&self) -> bool {
+            self.0.load(Ordering::SeqCst) == COMMIT_REVOKED
+        }
+
+        fn admit_attempt(&self) -> io::Result<()> {
+            loop {
+                match self.0.load(Ordering::SeqCst) {
+                    COMMIT_OPEN => {
+                        if self
+                            .0
+                            .compare_exchange(
+                                COMMIT_OPEN,
+                                COMMIT_ADMITTED,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok()
+                        {
+                            return Ok(());
+                        }
+                    }
+                    COMMIT_ADMITTED => return Ok(()),
+                    COMMIT_REVOKED | COMMIT_DONE => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "publication authorization revoked",
+                        ));
+                    }
+                    _ => unreachable!("invalid commit gate state"),
+                }
+            }
+        }
+
+        fn published(&self) {
+            self.0.store(COMMIT_DONE, Ordering::SeqCst);
+        }
+    }
+
+    /// This capability cannot be constructed from serialized observations: it
+    /// borrows the live containment reservation, session, quota lease, and
+    /// staging identity for the entire finalization call.
+    struct PublicationSeal<'a, 'b, C: Controller, Q: QuotaLease> {
+        containment: &'a mut C,
+        session: &'a C::Session,
+        quota: &'a mut Q,
+        staging_path: &'a Path,
+        admission: &'a Admission<'b>,
+    }
+
+    impl<C: Controller, Q: QuotaLease> PublicationSeal<'_, '_, C, Q> {
+        fn authorize(&mut self) -> io::Result<()> {
+            if !self.admission.consent_valid || self.admission.interrupted().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "consent, cancellation, or deadline no longer authorizes publication",
+                ));
+            }
+            if self.containment.populated(self.session) != Ok(false)
+                || self.quota.revalidate().is_err()
+                || self.quota.verify_directory(self.staging_path).is_err()
+            {
+                return Err(io::Error::other(
+                    "live containment or quota reservation could not be verified",
+                ));
+            }
+            // Last bounded operation before the publication syscall.
+            self.admission.commit_gate.admit_attempt()
+        }
+    }
 
     #[derive(Debug)]
     struct Completion {
@@ -979,15 +1091,6 @@ mod receive {
             return Ok(Completion::retained(run));
         }
 
-        // The real cleanup reads recursive population again before changing
-        // the cgroups. Reservation release must succeed before touching data.
-        if lease
-            .cleanup(session)
-            .and_then(|()| lease.release())
-            .is_err()
-        {
-            return Ok(Completion::retained(run));
-        }
         if quota.revalidate().is_err()
             || quota.verify_directory(staging.path()).is_err()
             || quota.verify_directory(runtime.path()).is_err()
@@ -1005,13 +1108,54 @@ mod receive {
             normal_exit,
         );
         if eligible && !CRASH_SUPERVISION_QUALIFIED {
+            // The session is clean, but there is no qualified external
+            // authority to publish. Retain the staging/runtime and quota
+            // reservation. Release containment only after this failure
+            // decision has been finalized.
+            staging.preserve();
+            if lease
+                .cleanup(session)
+                .and_then(|()| lease.release())
+                .is_err()
+            {
+                return Ok(Completion::retained(run));
+            }
             return Ok(Completion::retained(run));
         }
         if runtime.discard().is_err() {
             return Ok(Completion::retained(run));
         }
-        let (files, bytes, cleanup) =
-            finish_staging(staging, eligible && CRASH_SUPERVISION_QUALIFIED, true);
+
+        // Do not release containment or quota before the final staging scan,
+        // per-attempt authorization and atomic rename (or definitive error).
+        let (files, bytes, cleanup) = if eligible {
+            let staging_path = staging.path().to_path_buf();
+            let mut seal = PublicationSeal {
+                containment: &mut lease,
+                session: &session,
+                quota: &mut quota,
+                staging_path: &staging_path,
+                admission: &admission,
+            };
+            match staging.finalize_with(|| seal.authorize()) {
+                Ok(result) => {
+                    admission.commit_gate.published();
+                    (result.files, result.bytes, "complete")
+                }
+                Err(_) => (0, 0, "incomplete"),
+            }
+        } else {
+            finish_staging(staging, false, true)
+        };
+        // A failure to finalize is definitive only after the finalizer has
+        // returned; now the writer boundary may be settled and released.
+        if lease
+            .cleanup(session)
+            .and_then(|()| lease.release())
+            .is_err()
+        {
+            return Ok(Completion::retained(run));
+        }
         if cleanup != "complete" || quota.revalidate().is_err() {
             return Ok(Completion::retained(run));
         }
@@ -1145,9 +1289,19 @@ mod receive {
                 },
             );
         }
-        match staging.finalize() {
-            Ok(result) => (result.files, result.bytes, "complete"),
-            Err(_) => (0, 0, "incomplete"),
+        #[cfg(test)]
+        {
+            match staging.finalize() {
+                Ok(result) => (result.files, result.bytes, "complete"),
+                Err(_) => (0, 0, "incomplete"),
+            }
+        }
+        #[cfg(not(test))]
+        {
+            // Production publication is only possible through the sealed
+            // coordinator path, never this failure-settlement helper.
+            staging.preserve();
+            (0, 0, "incomplete")
         }
     }
 
@@ -1239,9 +1393,12 @@ mod receive {
         output_exceeded: &AtomicBool,
         output_failed: &AtomicBool,
     ) -> BackendRun {
+        let commit_gate = CommitGate::default();
         let admission = Admission {
             destination: staging.path(),
             cancelled,
+            commit_gate: &commit_gate,
+            consent_valid: true,
             deadline,
             now: &Instant::now,
         };
@@ -1561,11 +1718,14 @@ mod receive {
             let deadline = origin + Duration::from_secs(30);
             let clock = || if expired.get() { deadline } else { origin };
             let destination = root.join("dest");
+            let commit_gate = CommitGate::default();
             let events = std::cell::RefCell::new(Vec::new());
             let result = coordinate(
                 Admission {
                     destination: &destination,
                     cancelled: &cancelled,
+                    commit_gate: &commit_gate,
+                    consent_valid: true,
                     deadline,
                     now: &clock,
                 },
@@ -1669,11 +1829,11 @@ mod receive {
                     "launch",
                     "observe",
                     "observe",
-                    "cleanup",
-                    "release",
                     "quota_revalidate",
                     "quota_verify",
                     "quota_verify",
+                    "cleanup",
+                    "release",
                 ]
             );
             assert!(!root.path().join("owner").exists());
@@ -1687,6 +1847,92 @@ mod receive {
                 ["acquire", "create", "quota_acquire", "cleanup", "release"]
             );
             assert_eq!(private_resource_counts(root.path()), (1, 1));
+        }
+
+        #[test]
+        fn publication_seal_keeps_live_reservations_through_final_rename() {
+            let root = fixture_root();
+            let destination = root.path().join("dest");
+            let cgroup_marker = root.path().join("owner");
+            let quota_marker = destination.join("quota-owner");
+            std::fs::create_dir(&cgroup_marker).unwrap();
+            std::fs::create_dir(&quota_marker).unwrap();
+            let events = std::cell::RefCell::new(Vec::new());
+            let scenario = Scenario {
+                observations: vec![Ok(false)],
+                ..Default::default()
+            };
+            let mut containment = FixtureLease {
+                marker: cgroup_marker.clone(),
+                events: &events,
+                scenario: &scenario,
+                observations: scenario.observations.clone().into_iter(),
+            };
+            let session = ();
+            let mut quota = FixtureQuotaLease {
+                root: destination.clone(),
+                marker: quota_marker.clone(),
+                events: &events,
+                scenario: &scenario,
+            };
+            let cancelled = AtomicBool::new(false);
+            let commit_gate = CommitGate::default();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let admission = Admission {
+                destination: &destination,
+                cancelled: &cancelled,
+                commit_gate: &commit_gate,
+                consent_valid: true,
+                deadline,
+                now: &Instant::now,
+            };
+            let staging = storage::ReceiveStaging::create(&destination).unwrap();
+            std::fs::write(staging.path().join("received.bin"), b"payload").unwrap();
+            let staging_path = staging.path().to_path_buf();
+            let finalized = {
+                let mut seal = PublicationSeal {
+                    containment: &mut containment,
+                    session: &session,
+                    quota: &mut quota,
+                    staging_path: &staging_path,
+                    admission: &admission,
+                };
+                staging.finalize_with(|| seal.authorize()).unwrap()
+            };
+            commit_gate.published();
+            assert_eq!(finalized.files, 1);
+            assert_eq!(commit_gate.0.load(Ordering::SeqCst), COMMIT_DONE);
+            assert!(cgroup_marker.exists());
+            assert!(quota_marker.exists());
+            assert!(std::fs::read_dir(&destination).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("AirDrop Receive ")
+            }));
+            containment.cleanup(session).unwrap();
+            containment.release().unwrap();
+            quota.release().unwrap();
+            assert!(!cgroup_marker.exists());
+            assert!(!quota_marker.exists());
+        }
+
+        #[test]
+        fn cancellation_and_commit_admission_have_one_atomic_winner() {
+            let cancelled_first = CommitGate::default();
+            cancelled_first.revoke();
+            assert!(cancelled_first.admit_attempt().is_err());
+
+            let commit_first = CommitGate::default();
+            commit_first.admit_attempt().unwrap();
+            commit_first.revoke();
+            assert!(commit_first.is_revoked());
+            // The caller resolves an in-flight attempt from the rename result.
+            // A successful no-replace rename is irreversible and wins.
+            commit_first.published();
+            commit_first.revoke();
+            assert_eq!(commit_first.0.load(Ordering::SeqCst), COMMIT_DONE);
         }
 
         #[test]
@@ -1742,12 +1988,12 @@ mod receive {
                 assert_eq!(completion.run.0, reason);
                 assert_eq!(completion.cleanup, "complete");
                 assert_eq!(private_resource_counts(root.path()), (0, 0));
-                assert!(
-                    events
-                        .windows(3)
-                        .any(|events| events == ["observe", "cleanup", "release"])
-                );
-                assert!(events.ends_with(&["quota_revalidate", "quota_release"]));
+                assert!(events.ends_with(&[
+                    "cleanup",
+                    "release",
+                    "quota_revalidate",
+                    "quota_release"
+                ]));
                 if scenario.placement_fails || scenario.cancel || scenario.expire {
                     assert!(events.contains(&"kill"));
                 }
@@ -1833,11 +2079,12 @@ mod receive {
             );
             assert_eq!(completion.run, FAILED);
             assert_eq!(completion.cleanup, "complete");
-            assert!(events.windows(7).any(|events| events
-                == [
-                    "observe", "kill", "observe", "observe", "observe", "cleanup", "release"
-                ]));
-            assert!(events.ends_with(&["quota_revalidate", "quota_release"]));
+            assert!(
+                events
+                    .windows(5)
+                    .any(|events| events == ["observe", "kill", "observe", "observe", "observe"])
+            );
+            assert!(events.ends_with(&["cleanup", "release", "quota_revalidate", "quota_release"]));
             assert_eq!(private_resource_counts(root.path()), (0, 0));
         }
 

@@ -13,6 +13,14 @@ OpenContinuity handles security-sensitive interoperability work. Report vulnerab
 
 P001 performs no scanning, authentication changes, device writes, radio takeover, or service installation. The daemon is a foreground, nonprivileged idle process.
 
+P019G adds a rootless local manager/guardian protocol prototype and a hardened
+inactive publication boundary. The prototype authenticates kernel peer
+credentials and uses pidfds, but it has no cgroup, quota, trusted placement,
+filesystem sandbox or publication authority. It is not connected to Receive.
+`writer_containment_available()` and `CRASH_SUPERVISION_QUALIFIED` remain false;
+Qt Receive remains disabled. See
+[P019G's precise boundaries](docs/research/P019G_TRUSTED_MANAGER_AND_PUBLICATION_BOUNDARY.md).
+
 ## Supported report scope
 
 The doctor report describes this build's known implementation status; it does not perform security checks on the host, discover devices, or establish trust. Unknown trust fields must remain unknown until proven by explicit secure procedures.

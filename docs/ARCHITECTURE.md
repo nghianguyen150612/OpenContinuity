@@ -169,3 +169,23 @@ disabled. Reports keep control, advertisement and data plane independent and
 retain `authorization: never_evaluated` and
 `physicalQualification: not_qualified`. See the [P019 architecture](research/P019_AWDL_BACKEND_ARCHITECTURE.md)
 and [security review](research/P019_AIRDROP_RECEIVE_SECURITY.md).
+
+## P019G publication and manager prototype
+
+The inactive coordinator retains its actual containment and project-quota
+lease objects through final staging validation and atomic
+`RENAME_NOREPLACE`. Its non-copyable `PublicationSeal` rechecks consent,
+deadline, cancellation, recursive emptiness and quota identity before each
+rename attempt. An atomic commit gate serializes cancellation with admission.
+Tests cover ordering with fixture leases and a real local filesystem rename;
+this is publication-policy evidence, not kernel containment or authority
+qualification.
+
+The standalone `p019g-manager` binary is a rootless IPC and pidfd prototype. It
+uses `SO_PEERCRED`, fixed 64-byte versioned frames, instance/session/epoch
+binding, cross-connection sequence checks, a held supervisor pidfd and stale
+reservation refusal. It has no cgroup/quota handle, worker launcher,
+guardian-of-the-guardian, backend sandbox or publication authority. It remains
+disconnected from Receive. Kernel containment/quota are NOT_RUN, sandbox and
+production Receive remain BLOCKED, and all production/physical qualification
+fields stay unchanged. See [P019G](research/P019G_TRUSTED_MANAGER_AND_PUBLICATION_BOUNDARY.md).

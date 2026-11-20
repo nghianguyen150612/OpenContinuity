@@ -256,7 +256,18 @@ impl ReceiveStaging {
     /// Move validated complete outputs into the user-approved destination.
     /// Leftover Owly `.owly-staging-*` directories contain interrupted upload
     /// data and are discarded. Every final move uses RENAME_NOREPLACE.
-    pub fn finalize(mut self) -> io::Result<FinalizedReceive> {
+    #[cfg(test)]
+    pub fn finalize(self) -> io::Result<FinalizedReceive> {
+        self.finalize_with(|| Ok(()))
+    }
+
+    /// Finalize while a caller-owned, live publication capability validates
+    /// authorization at every actual rename attempt. The callback runs after
+    /// all potentially lengthy scanning and permission work.
+    pub(super) fn finalize_with(
+        mut self,
+        mut authorize: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<FinalizedReceive> {
         self.usage()?;
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
@@ -307,6 +318,7 @@ impl ReceiveStaging {
             getrandom::getrandom(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
             let name = CString::new(format!("AirDrop Receive {}", hex_lower(&random)))
                 .map_err(|_| invalid_name())?;
+            authorize()?;
             match rename_bundle(&self.destination, &source, &name) {
                 Ok(()) => {
                     published = true;
@@ -650,6 +662,59 @@ mod tests {
         );
         assert!(safe_component(&"表".repeat(85)));
         assert!(!safe_component(&"表".repeat(86)));
+    }
+
+    #[test]
+    fn commit_authorization_runs_after_validation_at_the_rename_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = ReceiveStaging::create(root.path()).unwrap();
+        let stage_path = stage.path().to_path_buf();
+        fs::write(stage_path.join("accepted.bin"), b"bounded payload").unwrap();
+        let mut events = Vec::new();
+
+        let finalized = stage
+            .finalize_with(|| {
+                events.push("authorized_attempt");
+                // Final validation and permission restriction have already
+                // completed when this last authorization point is reached.
+                assert_eq!(
+                    fs::metadata(stage_path.join("accepted.bin"))?
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(finalized.files, 1);
+        assert_eq!(finalized.bytes, 15);
+        assert_eq!(events, ["authorized_attempt"]);
+        assert_eq!(
+            fs::read_dir(root.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("AirDrop Receive "))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn rejected_commit_authorization_never_renames_the_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = ReceiveStaging::create(root.path()).unwrap();
+        fs::write(stage.path().join("accepted.bin"), b"payload").unwrap();
+
+        let result =
+            stage.finalize_with(|| Err(io::Error::new(io::ErrorKind::Interrupted, "revoked")));
+
+        assert!(result.is_err());
+        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
     }
 
     #[test]

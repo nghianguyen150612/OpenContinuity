@@ -221,3 +221,49 @@ passed** (21 new contract/harness tests). `--mock` emits MOCK_PASS only for
 the offline suite, host preflight BLOCKED and kernel NOT_RUN. Qt/QML and
 Swift/CryptoKit/watchOS remain hosted gates; those toolchains are unavailable
 on this host. No real quota, cgroup, guardian or AirDrop case ran.
+
+## P019G publication boundary and rootless manager prototype
+
+P019G corrects the inactive release-before-finalize gap. The coordinator keeps
+its live containment reservation and quota lease until staging finalization has
+returned. A private non-copyable seal performs consent, cancellation, deadline,
+recursive-empty and quota checks immediately before each
+`renameat2(RENAME_NOREPLACE)` attempt. The atomic commit admission transition
+serializes with signal-driven cancellation. The test uses a real local
+same-directory rename while fixture lease objects remain live; it qualifies
+publication ordering/policy only.
+
+The new `p019g-manager` executable uses real Unix peer credentials, fixed
+64-byte versioned IPC, instance/session/epoch binding, monotonic sequencing,
+and a pidfd for one supervisor process. Ordinary tests run without root and
+cover normal supervisor exit, SIGKILL, pidfd death observation, peer mismatch,
+replay/reorder, stale epoch/reservation, guardian process death, a surviving
+grandchild, and bounded local IPC. It does not own a cgroup, launch/place
+workers, confine writes, supervise its own death, or issue a publication
+authority lease. No serialized manager observation is wired into Receive.
+
+Local P019G gates on Debian 13 / Linux 6.18.57 / uid 1000:
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| `cargo test --workspace --all-targets` | PASS, 277 passed / 2 ignored |
+| `cargo build --workspace` | PASS |
+| Python unittest discovery | PASS, 76 tests |
+| `git diff --check` | PASS |
+| Offline protocol | PASS for implemented frame/credential/sequence and process observations |
+| Publication policy | PASS for real local atomic rename under fixture leases |
+| Real process lifetime | PASS for separate test guardian/supervisor processes and pidfds |
+| Kernel containment | NOT_RUN; no exclusive delegated subtree or trusted placement |
+| Kernel quota | NOT_RUN; overlayfs host has no disposable XFS project quota |
+| Sandbox qualification | BLOCKED; no enforced UID/mount/IPC/descriptor profile |
+| Hosted Qt/QML, Swift/CryptoKit and watchOS | Run on the exact pushed commit; URLs and conclusions in delivery report |
+
+The requested qualification boundary remains **PARTIAL**. Production Receive
+stays BLOCKED; `writer_containment_available()` is literal false,
+`CRASH_SUPERVISION_QUALIFIED` is false, Qt Receive stays disabled, and no host
+configuration or live Owly Receive was used. `authorization:
+never_evaluated`, `physicalQualification: not_qualified`, RTL8852BE AWDL / iPhone
+13 AirDrop NOT RUN, Watch SE 2 W0–W6 NOT RUN/BLOCKED, Native Apple Auto Unlock
+NO-GO.

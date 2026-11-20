@@ -261,6 +261,8 @@ replay, seal-before-commit, consent/deadline and retention on uncertainty. It is
 offline and does not authenticate an OS peer or implement a privileged manager.
 Actual enforcement requires a separate launcher, isolated backend credentials,
 closed writable descriptors/IPC and an external system manager on supervisor or
-guardian loss. The inactive coordinator still lacks an ingress seal held across
-validation/rename and commit-time consent recheck. See
-[P019F qualification](research/P019F_TRUSTED_DEPLOYMENT_AND_KERNEL_QUALIFICATION.md).
+guardian loss. P019G adds a rootless SO_PEERCRED/pidfd process prototype and
+holds the inactive coordinator's live containment/quota leases through the
+rename. It still has no trusted authority lease, real cgroup placement or
+enforced sandbox; both production gates therefore remain false. See
+[P019G publication boundary](research/P019G_TRUSTED_MANAGER_AND_PUBLICATION_BOUNDARY.md).
