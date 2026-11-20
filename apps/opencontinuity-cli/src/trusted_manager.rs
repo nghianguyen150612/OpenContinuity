@@ -37,13 +37,46 @@ pub enum ManagerError {
     PeerMismatch,
     Protocol,
     ReplayOrOrder,
-    Io,
+    Io(IoFailure),
+}
+
+/// Sanitized I/O provenance. It intentionally contains no filesystem path or
+/// protocol identity, while retaining the operation and original OS failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IoFailure {
+    pub operation: &'static str,
+    pub kind: io::ErrorKind,
+    pub raw_os_error: Option<i32>,
 }
 
 impl ManagerError {
     fn io(self) -> io::Error {
-        io::Error::other(format!("P019G manager error: {self:?}"))
+        match self {
+            Self::Io(failure) => io::Error::new(
+                failure.kind,
+                format!(
+                    "P019G {} failed (errno {:?})",
+                    failure.operation, failure.raw_os_error
+                ),
+            ),
+            other => io::Error::other(format!("P019G manager error: {other:?}")),
+        }
     }
+}
+
+fn io_failure(operation: &'static str, error: io::Error) -> ManagerError {
+    ManagerError::Io(IoFailure {
+        operation,
+        kind: error.kind(),
+        raw_os_error: error.raw_os_error(),
+    })
+}
+
+fn policy_failure(operation: &'static str) -> ManagerError {
+    io_failure(
+        operation,
+        io::Error::new(io::ErrorKind::PermissionDenied, "policy check failed"),
+    )
 }
 
 pub struct Pidfd(OwnedFd);
@@ -119,10 +152,16 @@ fn serve_with_ready(
     identity: Identity,
     ready: impl FnOnce(),
 ) -> Result<(), ManagerError> {
-    let parent = socket.parent().ok_or(ManagerError::Io)?;
-    let metadata = std::fs::metadata(parent).map_err(|_| ManagerError::Io)?;
+    let parent = socket.parent().ok_or_else(|| {
+        io_failure(
+            "socket_parent_lookup",
+            io::Error::new(io::ErrorKind::InvalidInput, "socket has no parent"),
+        )
+    })?;
+    let metadata = std::fs::metadata(parent)
+        .map_err(|error| io_failure("parent_directory_metadata", error))?;
     if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-        return Err(ManagerError::Io);
+        return Err(policy_failure("parent_directory_permissions"));
     }
     // A stale marker is retained on every error and is never recovered by
     // pathname inspection alone.
@@ -132,22 +171,26 @@ fn serve_with_ready(
         .create_new(true)
         .mode(0o600)
         .open(marker)
-        .map_err(|_| ManagerError::Io)?;
+        .map_err(|error| io_failure("reservation_marker_create", error))?;
     reservation
         .write_all(&encode_identity(identity))
-        .map_err(|_| ManagerError::Io)?;
+        .map_err(|error| io_failure("reservation_marker_write", error))?;
 
-    let pidfd = Pidfd::open(supervisor_pid).map_err(|_| ManagerError::Io)?;
-    let listener = UnixListener::bind(socket).map_err(|_| ManagerError::Io)?;
+    let pidfd = Pidfd::open(supervisor_pid).map_err(|error| io_failure("pidfd_open", error))?;
+    let listener =
+        UnixListener::bind(socket).map_err(|error| io_failure("unix_socket_bind", error))?;
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
-        .map_err(|_| ManagerError::Io)?;
+        .map_err(|error| io_failure("socket_permissions", error))?;
     listener
         .set_nonblocking(true)
-        .map_err(|_| ManagerError::Io)?;
+        .map_err(|error| io_failure("socket_nonblocking", error))?;
     ready();
     let mut expected_sequence = 1_u64;
     loop {
-        if pidfd.exited().map_err(|_| ManagerError::Io)? {
+        if pidfd
+            .exited()
+            .map_err(|error| io_failure("pidfd_poll", error))?
+        {
             return Err(ManagerError::SupervisorExited);
         }
         match listener.accept() {
@@ -155,16 +198,16 @@ fn serve_with_ready(
                 verify_peer(&stream, supervisor_pid, supervisor_uid)?;
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
-                    .map_err(|_| ManagerError::Io)?;
+                    .map_err(|error| io_failure("peer_read_timeout", error))?;
                 stream
                     .set_write_timeout(Some(Duration::from_secs(1)))
-                    .map_err(|_| ManagerError::Io)?;
+                    .map_err(|error| io_failure("peer_write_timeout", error))?;
                 serve_peer(stream, identity, &pidfd, &mut expected_sequence)?;
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(POLL_MS as u64));
             }
-            Err(_) => return Err(ManagerError::Io),
+            Err(error) => return Err(io_failure("socket_accept", error)),
         }
     }
 }
@@ -176,14 +219,17 @@ fn serve_peer(
     sequence: &mut u64,
 ) -> Result<(), ManagerError> {
     loop {
-        if pidfd.exited().map_err(|_| ManagerError::Io)? {
+        if pidfd
+            .exited()
+            .map_err(|error| io_failure("pidfd_poll", error))?
+        {
             return Err(ManagerError::SupervisorExited);
         }
         let mut frame = [0_u8; FRAME_LEN];
         match stream.read_exact(&mut frame) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
-            Err(_) => return Err(ManagerError::Io),
+            Err(error) => return Err(io_failure("peer_frame_read", error)),
         }
         let (operation, request_identity, request_sequence) = decode(&frame)?;
         if operation != HEARTBEAT || request_identity != identity {
@@ -191,8 +237,12 @@ fn serve_peer(
         }
         accept_sequence(sequence, request_sequence)?;
         let response = encode(ACK, identity, request_sequence);
-        stream.write_all(&response).map_err(|_| ManagerError::Io)?;
-        stream.flush().map_err(|_| ManagerError::Io)?;
+        stream
+            .write_all(&response)
+            .map_err(|error| io_failure("peer_frame_write", error))?;
+        stream
+            .flush()
+            .map_err(|error| io_failure("peer_frame_flush", error))?;
     }
 }
 
@@ -201,7 +251,7 @@ fn verify_peer(
     expected_pid: libc::pid_t,
     expected_uid: libc::uid_t,
 ) -> Result<Peer, ManagerError> {
-    let peer = peer_credentials(stream).map_err(|_| ManagerError::Io)?;
+    let peer = peer_credentials(stream).map_err(|error| io_failure("peer_credentials", error))?;
     if peer.pid != expected_pid || peer.uid != expected_uid {
         return Err(ManagerError::PeerMismatch);
     }
