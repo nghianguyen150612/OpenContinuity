@@ -343,6 +343,13 @@ mod tests {
         }
     }
 
+    fn private_tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
+
     #[test]
     fn pidfd_observes_normal_exit_and_sigkill_without_pid_reuse() {
         let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
@@ -456,7 +463,7 @@ mod tests {
 
     #[test]
     fn guardian_observes_supervisor_death_and_retains_reservation() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_tempdir();
         let socket = root.path().join("guardian.sock");
         let mut supervisor = std::process::Command::new("sh")
             .args(["-c", "exec sleep 30"])

@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -9,6 +10,13 @@ const EPOCH: &str = "03030303030303030303030303030303";
 
 fn manager_binary() -> &'static str {
     env!("CARGO_BIN_EXE_p019g-manager")
+}
+
+fn private_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
 }
 
 fn wait_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
@@ -68,7 +76,7 @@ fn supervisor_command(socket: &Path, hold: bool) -> Command {
 
 #[test]
 fn manager_authenticates_real_supervisor_and_observes_pidfd_death() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let socket = root.path().join("guardian.sock");
     let mut supervisor = supervisor_command(&socket, false)
         .stdout(Stdio::piped())
@@ -88,7 +96,7 @@ fn manager_authenticates_real_supervisor_and_observes_pidfd_death() {
 
 #[test]
 fn guardian_crash_does_not_kill_supervisor_and_keeps_stale_reservation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let socket = root.path().join("guardian.sock");
     let mut supervisor = supervisor_command(&socket, true)
         .stdout(Stdio::piped())
