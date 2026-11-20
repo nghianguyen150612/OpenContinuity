@@ -160,8 +160,11 @@ fn serve_with_ready(
     })?;
     let metadata = std::fs::metadata(parent)
         .map_err(|error| io_failure("parent_directory_metadata", error))?;
-    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-        return Err(policy_failure("parent_directory_permissions"));
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(policy_failure("parent_directory_owner"));
+    }
+    if metadata.mode() & 0o077 != 0 {
+        return Err(policy_failure("parent_directory_mode"));
     }
     // A stale marker is retained on every error and is never recovered by
     // pathname inspection alone.
