@@ -272,12 +272,13 @@ NO-GO.
 
 Both final-head Rust jobs at the original P019G SHA failed
 `trusted_manager::tests::guardian_observes_supervisor_death_and_retains_reservation`
-before readiness. The error provenance showed the failure at the strict
-`parent_directory_mode` check. The fixture used `tempfile::tempdir()` with its
-default mode, which follows the ambient umask. The hosted runner's less
-restrictive umask left group/other permission bits set, while this local
-workspace's `0077` umask had hidden the fixture defect. Re-running locally with
-`umask 0022` reproduced the same failure and operation.
+before readiness. A diagnostic hosted run localized the failure to the strict
+parent-directory permission gate (`PermissionDenied`, no OS errno). The fixture
+used `tempfile::tempdir()` with its default mode, which follows the ambient
+umask. This workspace's `0077` umask had hidden the fixture defect; re-running
+locally with `umask 0022` reproduced the guardian failure and narrowed it to the
+group/other mode-bit check. The hosted log did not expose the directory's
+numeric mode or owner.
 
 The unit and integration fixtures now request mode `0700` when creating their
 temporary parent directories. Production owner and mode checks are unchanged.
