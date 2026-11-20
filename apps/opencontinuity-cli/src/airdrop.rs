@@ -2193,6 +2193,116 @@ mod receive {
         }
 
         #[test]
+        fn publication_boundary_crash_fixture() {
+            let Ok(phase) = std::env::var("OC_P019G_PUBLICATION_CRASH_PHASE") else {
+                return;
+            };
+            let root = PathBuf::from(std::env::var_os("OC_P019G_PUBLICATION_CRASH_ROOT").unwrap());
+            let destination = root.join("dest");
+            let containment_marker = root.join("owner");
+            let quota_marker = destination.join("quota-owner");
+            std::fs::create_dir(&containment_marker).unwrap();
+            std::fs::create_dir(&quota_marker).unwrap();
+
+            let events = std::cell::RefCell::new(Vec::new());
+            let scenario = Scenario {
+                observations: vec![Ok(false)],
+                ..Default::default()
+            };
+            let mut containment = FixtureLease {
+                marker: containment_marker,
+                events: &events,
+                scenario: &scenario,
+                observations: scenario.observations.clone().into_iter(),
+            };
+            let mut quota = FixtureQuotaLease {
+                root: destination.clone(),
+                marker: quota_marker,
+                events: &events,
+                scenario: &scenario,
+            };
+            let session = ();
+            let cancelled = AtomicBool::new(false);
+            let commit_gate = CommitGate::default();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let admission = Admission {
+                destination: &destination,
+                cancelled: &cancelled,
+                commit_gate: &commit_gate,
+                consent_valid: true,
+                deadline,
+                now: &Instant::now,
+            };
+            let staging = ReceiveStaging::create(&destination).unwrap();
+            std::fs::write(staging.path().join("received.bin"), b"payload").unwrap();
+            let staging_path = staging.path().to_path_buf();
+            let mut seal = PublicationSeal {
+                containment: &mut containment,
+                session: &session,
+                quota: &mut quota,
+                staging_path: &staging_path,
+                admission: &admission,
+            };
+
+            match phase.as_str() {
+                // finalize_with has completed its full scan and permission
+                // pass. The process exits before authorization admission and
+                // before the publication syscall.
+                "before" => {
+                    let _ = staging.finalize_with(|| std::process::exit(86));
+                    panic!("fixture unexpectedly reached publication");
+                }
+                // A successful local rename and COMMITTED transition have
+                // completed. Exit without unwinding to model supervisor loss.
+                "after" => {
+                    staging.finalize_with(|| seal.authorize()).unwrap();
+                    commit_gate.published();
+                    std::process::exit(87);
+                }
+                _ => panic!("unknown publication crash fixture phase"),
+            }
+        }
+
+        #[test]
+        fn publication_crash_before_or_after_commit_preserves_observed_state() {
+            for (phase, exit_code, published) in [("before", 86, false), ("after", 87, true)] {
+                let root = fixture_root();
+                let exit = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "airdrop::receive::tests::publication_boundary_crash_fixture",
+                    ])
+                    .env("OC_P019G_PUBLICATION_CRASH_PHASE", phase)
+                    .env("OC_P019G_PUBLICATION_CRASH_ROOT", root.path())
+                    .stdout(Stdio::null())
+                    .status()
+                    .unwrap();
+                assert_eq!(exit.code(), Some(exit_code));
+                assert!(root.path().join("owner").exists());
+                assert!(root.path().join("dest/quota-owner").exists());
+                let bundles: Vec<_> = std::fs::read_dir(root.path().join("dest"))
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| {
+                        path.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("AirDrop Receive ")
+                    })
+                    .collect();
+                assert_eq!(bundles.len(), usize::from(published));
+                if published {
+                    assert_eq!(
+                        std::fs::read(bundles[0].join("received.bin")).unwrap(),
+                        b"payload"
+                    );
+                } else {
+                    assert_eq!(private_resource_counts(root.path()), (1, 0));
+                }
+            }
+        }
+
+        #[test]
         fn receive_options_require_exact_backend_consent_destination_and_bounds() {
             let args = [
                 "--backend".into(),

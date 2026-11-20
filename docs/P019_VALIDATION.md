@@ -248,12 +248,12 @@ Local P019G gates on Debian 13 / Linux 6.18.57 / uid 1000:
 | --- | --- |
 | `cargo fmt --all -- --check` | PASS |
 | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
-| `cargo test --workspace --all-targets` | PASS, 277 passed / 2 ignored |
+| `cargo test --workspace --all-targets` | PASS, 279 passed / 2 ignored |
 | `cargo build --workspace` | PASS |
 | Python unittest discovery | PASS, 76 tests |
 | `git diff --check` | PASS |
 | Offline protocol | PASS for implemented frame/credential/sequence and process observations |
-| Publication policy | PASS for real local atomic rename under fixture leases |
+| Publication policy | PASS for real local atomic rename under fixture leases, including subprocess crashes before commit admission and after a committed rename |
 | Real process lifetime | PASS for separate test guardian/supervisor processes and pidfds |
 | Kernel containment | NOT_RUN; no exclusive delegated subtree or trusted placement |
 | Kernel quota | NOT_RUN; overlayfs host has no disposable XFS project quota |

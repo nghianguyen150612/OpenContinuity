@@ -64,6 +64,12 @@ These offline tests use a real local filesystem rename and fixture lease
 objects. They establish application ordering and policy only. They do not
 prove kernel cgroup containment, trusted guardian authority, staging
 immutability against a same-UID process, or production publication safety.
+Subprocess crash tests exit after the final staging scan but before commit
+admission, and immediately after a successful rename/committed transition.
+They verify that the first case leaves staging unpublished and the second
+leaves one complete bundle visible, with fixture ownership markers retained
+after either abrupt exit. The commit gate itself is process-local and is not
+claimed to survive a supervisor crash.
 
 ## Rootless manager/guardian prototype
 
@@ -183,7 +189,7 @@ the new commit before the issue is considered closed.
 | Physical qualification | NOT RUN; `authorization: never_evaluated`, `physicalQualification: not_qualified` |
 
 Local software gates: formatting PASS, Clippy with warnings denied PASS,
-workspace build PASS, workspace tests PASS (277 passed / 2 ignored), Python
+workspace build PASS, workspace tests PASS (279 passed / 2 ignored), Python
 tests PASS (76), and `git diff --check` PASS. The two ignored Rust cases are
 the opt-in cgroup and project-quota kernel tests; neither was run.
 
