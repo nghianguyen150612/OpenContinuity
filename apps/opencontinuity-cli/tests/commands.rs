@@ -20,6 +20,65 @@ fn help_and_version_work() {
 }
 
 #[test]
+fn receive_command_is_unavailable_without_backend_staging_or_publication() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("oc-p019i-receive-{}-{nonce}", std::process::id()));
+    let path = root.join("bin");
+    let destination = root.join("destination");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    let marker = root.join("backend-started");
+    let fake_owly = path.join("owly");
+    std::fs::write(
+        &fake_owly,
+        format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_owly, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .env("PATH", &path)
+        .args(["airdrop", "receive", "--backend", "owly", "--destination"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(!marker.exists(), "no backend process may start");
+    assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn airdrop_doctor_reports_read_only_unqualified_status() {
+    let output = Command::new(env!("CARGO_BIN_EXE_opencontinuity"))
+        .args(["airdrop", "doctor", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(output.stdout.len() <= 64 * 1024);
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["kind"], "airdrop_backend_status");
+    assert_eq!(report["authorization"], "never_evaluated");
+    assert_eq!(report["physicalQualification"], "not_qualified");
+    assert_eq!(report["receiverAvailable"], false);
+    assert_eq!(report["liveAirdropInteroperability"], "unknown");
+    assert!(report["radio"].get("ssid").is_none());
+    assert!(report["radio"].get("bssid").is_none());
+}
+
+#[test]
 fn gatt_diagnostics_flags_keep_the_experimental_guard_and_strict_trial_label() {
     let command = [
         "research",
