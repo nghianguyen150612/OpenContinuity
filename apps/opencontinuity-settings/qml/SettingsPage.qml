@@ -168,8 +168,78 @@ ScrollView {
         }
         Card {
             visible: page.pageIndex === 3
-            heading: "No transfers available"
-            detail: "Native AWDL/AirDrop interoperability is not implemented. This app does not advertise, receive or send files."
+            heading: "Read-only backend status"
+            status: airdropStatus.state
+            detail: airdropStatus.lastError.length > 0
+                    ? airdropStatus.lastError
+                    : "This check reads local Wi-Fi and Owly status only. It does not scan, start AWDL, change the radio, or contact nearby Apple devices."
+        }
+        ColumnLayout {
+            visible: page.pageIndex === 3
+            Layout.fillWidth: true
+            spacing: 10
+            Button {
+                objectName: "airdropRefresh"
+                text: airdropStatus.loading ? "Checking local status…" : "Refresh read-only status"
+                enabled: !airdropStatus.loading
+                onClicked: airdropStatus.refresh()
+            }
+            Label {
+                objectName: "airdropBackendStatus"
+                visible: airdropStatus.state === "loaded"
+                text: "Backend: " + airdropStatus.report.backend +
+                      " · control plane: " + airdropStatus.report.controlPlane +
+                      " · data plane: " + airdropStatus.report.dataPlane +
+                      " · advertisement: " + airdropStatus.report.advertisement
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            Label {
+                objectName: "airdropRadioStatus"
+                visible: airdropStatus.state === "loaded"
+                text: "Radio: " + airdropStatus.report.radioState +
+                      " · driver: " + airdropStatus.report.driver +
+                      " · PCI: " + airdropStatus.report.pciId +
+                      " · Wi-Fi channel: " + airdropStatus.report.channel +
+                      " · associated: " + airdropStatus.report.associated +
+                      " · monitor mode: " + airdropStatus.report.monitorMode +
+                      " · AWDL interface: " + airdropStatus.report.awdlState +
+                      " · regulatory domain: " + airdropStatus.report.regulatoryDomain
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            Label {
+                objectName: "airdropQualificationStatus"
+                visible: airdropStatus.state === "loaded"
+                text: "Authorization: " + airdropStatus.report.authorization +
+                      " · physical qualification: " + airdropStatus.report.physicalQualification
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            Label {
+                objectName: "airdropBlockReason"
+                visible: airdropStatus.state === "loaded"
+                text: "Current limitation: " + airdropStatus.report.blockReason
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            Button {
+                objectName: "airdropReceiveDisabled"
+                text: "Receive files from AirDrop"
+                enabled: false
+            }
+            Label {
+                text: airdropStatus.state === "loaded" && airdropStatus.report.receiverAvailable
+                      ? "The backend reports an already-prepared local receiver path. For explicit per-transfer consent, run opencontinuity airdrop receive from a terminal. No receiver starts from Settings."
+                      : "Receive is unavailable from Settings. The CLI requires an already-prepared AWDL interface, an explicit terminal session, and a separate approval prompt for each incoming request. No radio setup is performed here."
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
         }
         Card {
             visible: page.pageIndex === 4

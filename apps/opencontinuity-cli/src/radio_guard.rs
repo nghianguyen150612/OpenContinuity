@@ -22,12 +22,27 @@ pub fn acquire(adapter: &str) -> std::io::Result<std::os::unix::net::UnixListene
 mod tests {
     #[test]
     fn guard_excludes_only_same_adapter_and_releases_on_drop() {
-        let name = format!("test-{}", std::process::id());
+        let mut nonce = [0_u8; 8];
+        getrandom::getrandom(&mut nonce).unwrap();
+        let name = format!("test-{}-{}", std::process::id(), hex(&nonce));
         let first = super::acquire(&name).unwrap();
         assert!(super::acquire(&name).is_err());
         let other = super::acquire(&format!("{name}-other")).unwrap();
         drop(first);
+        let reacquired = super::acquire(&name).unwrap();
+        assert!(super::acquire(&name).is_err());
+        drop(reacquired);
         assert!(super::acquire(&name).is_ok());
         drop(other);
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            output.push(DIGITS[(byte >> 4) as usize] as char);
+            output.push(DIGITS[(byte & 0x0f) as usize] as char);
+        }
+        output
     }
 }

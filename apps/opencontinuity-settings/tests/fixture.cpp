@@ -13,8 +13,9 @@ int main(int argc, char **argv) {
   QCoreApplication app(argc, argv);
   const auto command = app.arguments().mid(1);
   const bool inventory = command == QStringList{"devices", "list", "--json"};
+  const bool airdrop = command == QStringList{"airdrop", "doctor", "--json"};
   const bool discovery = command == QStringList{"devices", "discover", "--seconds", "10", "--events-jsonl"};
-  if (!inventory && !discovery && command != QStringList{"doctor", "--json"}) return 90;
+  if (!inventory && !airdrop && !discovery && command != QStringList{"doctor", "--json"}) return 90;
   if (discovery) {
     std::signal(SIGTERM, onSignal); std::signal(SIGINT, onSignal);
     const auto mode = qEnvironmentVariable("OC_DISCOVERY_MODE", "sample");
@@ -131,6 +132,17 @@ int main(int argc, char **argv) {
     if (mode == "duplicate_update") { auto observed = device(2, "Watch"); write(observed); auto update = device(3, "Watch", "updated"); write(update); return 0; }
     auto observed = device(2, "Nearby device"); write(observed);
     write(terminal(3, "completed", "complete", true, 1, 1, true, 10000));
+    return 0;
+  }
+  if (airdrop) {
+    const auto mode = qEnvironmentVariable("OC_AIRDROP_FIXTURE_MODE");
+    if (mode == "delay") QThread::msleep(200);
+    if (mode == "nonzero") return 12;
+    if (mode == "stderr") { std::fputs("private fixture detail", stderr); return 0; }
+    if (mode == "oversized") { const QByteArray large(70 * 1024, 'x'); std::fwrite(large.data(), 1, large.size(), stdout); return 0; }
+    if (mode == "invalid") { std::fputs(R"({"schemaVersion":1,"kind":"airdrop_backend_status","extra":true})", stdout); return 0; }
+    const QByteArray report = R"({"schemaVersion":1,"kind":"airdrop_backend_status","source":"owly_doctor","authorization":"never_evaluated","physicalQualification":"not_qualified","backend":"blocked","controlPlane":"blocked","dataPlane":"unknown","advertisement":"unknown","receiverAvailable":false,"liveAirdropInteroperability":"unknown","blockReason":"backend_not_installed","radio":{"state":"unsupported","kernelRelease":null,"driver":null,"pciId":null,"regulatoryDomain":null,"wifiChannel":null,"associated":null,"monitorMode":"unknown","wirelessInterfaceCount":0,"conflictingWirelessInterfaceCount":0,"awdlInterfaceState":"blocked","awdlLinkLocalAddressPresent":false,"effectiveUidIsRoot":false,"netAdminCapability":false,"netRawCapability":false},"upstreamVersion":null})";
+    std::fwrite(report.data(), 1, report.size(), stdout);
     return 0;
   }
   const auto mode = qEnvironmentVariable("OC_SETTINGS_TEST_MODE");

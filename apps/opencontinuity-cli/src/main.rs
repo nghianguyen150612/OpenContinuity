@@ -22,6 +22,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod airdrop;
 mod bluez;
 mod device_discovery;
 mod device_inventory;
@@ -47,6 +48,9 @@ const HELP: &str = concat!(
     "       opencontinuity devices discover [--seconds 10] [--adapter-index 1] --json\n",
     "       opencontinuity devices discover [--seconds 10] [--adapter-index 1] --events-jsonl\n",
     "       opencontinuity research watch-gatt serve --adapter hci0 --duration-seconds 60 --experimental [--diagnostics [--trial-id <32-lowercase-hex>]] [--json]\n\n",
+    "       opencontinuity airdrop doctor [--json]\n",
+    "       opencontinuity airdrop backend status [--json]\n",
+    "       opencontinuity airdrop receive --backend owly --destination <existing-directory> --duration-seconds <15..3600> --radio-prepared --consent\n\n",
     "Commands:\n",
     "  doctor         Report this build's capability states without scanning devices\n",
     "  devices list   Read one snapshot of BlueZ known devices (never scans)\n",
@@ -113,8 +117,13 @@ fn main() -> ExitCode {
         },
         Some("research") => run_research(args.collect()),
         Some("devices") => run_devices(args.collect()),
+        Some("airdrop") => run_airdrop(args.collect()),
         _ => usage_error(),
     }
+}
+
+fn run_airdrop(args: Vec<String>) -> ExitCode {
+    airdrop::run(&args)
 }
 
 fn run_devices(args: Vec<String>) -> ExitCode {

@@ -67,3 +67,22 @@ P013 uses public BlueZ Adapter1/ObjectManager/Properties D-Bus interfaces via th
 already pinned zbus 5.12.0 dependency. No BlueZ implementation source or Apple
 protocol code is copied. Reference: https://github.com/bluez/bluez/blob/master/doc/org.bluez.Adapter.rst.
 Existing Qt linking and distribution obligations remain unchanged.
+
+
+## P019 AirDrop/AWDL upstream review
+
+P019 inspected current repository snapshots at the commits and license
+boundaries recorded in the [detailed P019 audit](research/P019_UPSTREAM_AND_LICENSE_AUDIT.md):
+
+| Upstream | Revision | License finding | Use |
+| --- | --- | --- | --- |
+| [t4t5/owly](https://github.com/t4t5/owly/tree/6f2e8ea99aed0687558d78a1dd49154ab3a5fa76) | `6f2e8ea99aed0687558d78a1dd49154ab3a5fa76` | Workspace `owly-airdrop` / `owly-radio` metadata says MIT; nested `omdrop-owl/omdrop-awdl` tools carry GPL-2.0-only and are not reused. | Optional exact-version external CLI only; no code or binary is vendored. |
+| [seemoo-lab/owl](https://github.com/seemoo-lab/owl/tree/0ee3263f944ea721c355f826aa90d636d012a512) | `0ee3263f944ea721c355f826aa90d636d012a512` | GPL-3.0 | Research only; no copying/linking. |
+| [seemoo-lab/opendrop](https://github.com/seemoo-lab/opendrop/tree/11fe7ba7861093b302bc0637e8cb10adf2d29337) | `11fe7ba7861093b302bc0637e8cb10adf2d29337` | GPLv3, including Python package metadata | Research only; no copying/linking. |
+| [ayourtch-llm/opendrop-rs](https://github.com/ayourtch-llm/opendrop-rs/tree/dccc798e244363eb92d35e3c52e9a913188dda91) | `dccc798e244363eb92d35e3c52e9a913188dda91` | GPL-3.0-only | Research only; no copying/linking. |
+| [BenItBuhner/AirDrop-for-Everything](https://github.com/BenItBuhner/AirDrop-for-Everything/tree/34bdc8dfdd9c3eebd5b5bd8588b2fad2243a8e9c) | `34bdc8dfdd9c3eebd5b5bd8588b2fad2243a8e9c` | Root and workspace declare MIT; review `NOTICE` and each dependency before reuse. | Monitor; no code/dependency selected. |
+
+The external process boundary does not remove the need to audit upstream
+updates, binaries, transitive dependencies and distribution terms. The main
+OpenContinuity workspace remains MIT and Rust 1.85; Owly's inspected workspace
+declares Rust 1.88, so no direct library dependency was added.

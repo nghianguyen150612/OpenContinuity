@@ -165,3 +165,104 @@ authorization. Diagnostic overflow or a missing session terminal marks host or
 Watch evidence incomplete. Imported
 Watch/runtime records remain untrusted. No telemetry, automatic scan, pairing,
 trust mutation or login integration is added. `authorization: never_evaluated`.
+
+## P019 AirDrop receive and AWDL status
+
+P019 status is read-only and exposes a bounded set of local radio facts; the
+doctor can include the explicitly requested PCI ID, driver, kernel and channel
+in a local report. It does not include SSID, BSSID, interface address, device
+name, D-Bus path or transfer payload. The selected Owly executable is trusted
+local software, not sandboxed. Its terminal prompt may display untrusted sender
+and file metadata locally; that text is not copied into JSON. Only exact Owly
+0.4.2 in a fixed system path is considered, and the process never receives
+`--accept` or a shell command.
+
+The operator selects a destination and explicitly declares that radio setup is
+prepared. Receive uses a same-user lock, private staging, path/type/link/count/
+size checks, a per-file resource limit and no-overwrite finalization. Because
+Owly's public CLI does not expose aggregate decompressed-size and concurrency
+controls, periodic inspection can lag an active transfer and disk usage can
+temporarily exceed the published tree budget. There is no hard filesystem
+quota; Settings keeps Receive disabled. Owner-only output permissions reduce
+other-user exposure, but do not defend against another process running as the
+same account or a compromised local backend. Temporary Owly TLS identity files
+are removed on normal exit but are not securely erased. Receiver availability
+and software fixtures cannot prove AirDrop discovery, Apple identity, RF
+transfer or physical compatibility. Native Watch Auto Unlock remains NO-GO
+and all authorization remains `never_evaluated`.
+
+
+## P019B process containment
+
+P019 receive remains blocked before backend launch unless writer quiescence can
+be independently verified. The current Codex Cloud host exposes cgroup v2 but
+no writable delegated subtree or systemd manager. Process groups, leader
+reaping, pidfds, and source inspection do not prove descendant containment.
+See [P019B process containment](research/P019B_PROCESS_CONTAINMENT.md) for
+host evidence, the delegated-subtree requirements and escape limits. The
+aggregate staging scanner remains approximate and supplies no hard disk quota.
+
+## P019C cgroup foundation
+
+The cgroup v2 code is isolated from Receive activation. The false writer
+containment gate remains mandatory. The foundation requires an explicit
+exclusive delegated subtree, inaccessible parent migration control, pre-exec
+placement, recursive population checks, and bounded subtree kill. Fake
+controller tests establish only application-state behavior. No real delegated
+kernel test has run here; aggregate disk quotas remain unimplemented.
+
+## P019D Receive lifecycle
+
+The internal coordinator retains staging and runtime identity when recursive
+writer shutdown or containment cleanup is uncertain. Production Receive stays
+disabled. A trusted external launcher is needed to enter a delegation whose
+ancestors are protected from backend migration. A separately credentialed
+manager or guardian must survive supervisor failure and independently stop the
+owned subtree. A same-UID watchdog is exposed to signals, control-file access
+and IPC interference. Process containment also assumes the backend cannot
+delegate writes to an external process. Hard aggregate disk quota remains an
+independent blocker. See [P019D lifecycle and crash supervision](research/P019D_RECEIVE_LIFECYCLE_AND_CRASH_SUPERVISION.md).
+
+## P019E hard quota foundation
+
+The disabled internal lifecycle now requires an exclusive XFS or ext4 project-
+quota lease before it creates staging or per-session TLS state. It verifies an
+administrator-provisioned project ID, inheritance and exact hard block/inode
+limits, keeps an identity-pinned owner reservation, and revalidates after
+writer settlement. The same-project destination preserves P019A's single
+no-replace directory rename and keeps published allocation charged. Unknown
+enforcement, exhausted capacity, changed identity or failed release is
+fail-closed; no userspace counter fallback exists.
+
+This is an offline foundation, not enforcement qualification. The current
+overlayfs host cannot run its ignored kernel suite. Project quota does not
+confine a compromised same-UID backend from other writable paths, inherited
+descriptors, IPC writers or filesystems, and it does not cap all global
+filesystem metadata. Trusted filesystem provisioning, exclusive project-ID
+management and a launcher that closes every alternate write path are required.
+Containment, external crash supervision, commit-time consent and closed writer
+ingress also remain blockers. See [P019E hard disk quota foundation](research/P019E_HARD_DISK_QUOTA_FOUNDATION.md).
+
+Only XFS currently supplies the adapter's explicit enforcement flags. ext4
+accounting is readable but capability acquisition fails with enforcement
+unknown; neither filesystem has real-kernel qualification here.
+
+## P019F trusted deployment qualification
+
+The qualification harness runs only fixed ignored test identities on explicitly
+provisioned disposable resources, with current-boot, device/inode and distinct
+credential checks. Its default preflight is read-only. A root-owned manifest is
+an assertion by trusted provisioning, not proof against administrator changes
+or external writer ingress. Public reports cannot promote mock results into
+kernel, production or physical qualification; private bounded logs remain local.
+
+The launcher/guardian protocol validator checks identity binding, manager epochs,
+replay, seal-before-commit, consent/deadline and retention on uncertainty. It is
+offline and does not authenticate an OS peer or implement a privileged manager.
+Actual enforcement requires a separate launcher, isolated backend credentials,
+closed writable descriptors/IPC and an external system manager on supervisor or
+guardian loss. P019G adds a rootless SO_PEERCRED/pidfd process prototype and
+holds the inactive coordinator's live containment/quota leases through the
+rename. It still has no trusted authority lease, real cgroup placement or
+enforced sandbox; both production gates therefore remain false. See
+[P019G publication boundary](research/P019G_TRUSTED_MANAGER_AND_PUBLICATION_BOUNDARY.md).

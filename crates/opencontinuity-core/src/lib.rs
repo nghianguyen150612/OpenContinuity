@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod airdrop;
 pub mod bluez_research;
 pub mod gatt_wire;
 pub mod research;
@@ -82,9 +83,9 @@ impl DoctorReport {
                 },
                 Capability {
                     id: "airdrop".into(),
-                    state: CapabilityState::Unsupported,
+                    state: CapabilityState::Experimental,
                     summary:
-                        "Native AWDL/AirDrop interoperability is not implemented in this build."
+                        "Optional Owly receiver supervision is experimental; AWDL setup and Apple interoperability remain unqualified."
                             .into(),
                 },
                 Capability {
