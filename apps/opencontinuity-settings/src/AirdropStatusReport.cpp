@@ -74,9 +74,8 @@ std::optional<AirdropStatusReport> AirdropStatusReport::parse(
     return std::nullopt;
 
   const auto version = root.value("upstreamVersion");
-  static const QRegularExpression versionPattern("^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$");
   if (!version.isNull() &&
-      (!version.isString() || !versionPattern.match(version.toString()).hasMatch()))
+      (!version.isString() || version.toString() != "0.4.2"))
     return std::nullopt;
 
   const auto radio = root.value("radio").toObject();

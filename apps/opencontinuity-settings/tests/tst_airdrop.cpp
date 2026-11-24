@@ -60,6 +60,9 @@ private slots:
     changed.insert("extra", true);
     QTest::newRow("unknown-root-field") << QJsonDocument(changed).toJson();
     changed = root;
+    changed.insert("upstreamVersion", "0.4.3");
+    QTest::newRow("unapproved-backend-version") << QJsonDocument(changed).toJson();
+    changed = root;
     changed.insert("authorization", "allowed");
     QTest::newRow("authorization") << QJsonDocument(changed).toJson();
     changed = root;
