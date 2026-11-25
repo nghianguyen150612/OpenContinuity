@@ -37,6 +37,7 @@ pub enum BlockReason {
     RadioNotPrepared,
     RadioStateUnknown,
     BackendProbeFailed,
+    BackendProbeUnsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

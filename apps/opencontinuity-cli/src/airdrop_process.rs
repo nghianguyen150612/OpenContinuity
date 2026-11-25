@@ -1,7 +1,10 @@
-//! Bounded subprocess helpers for read-only probes of an installed backend.
+//! Bounded subprocess helpers for read-only probes of a trusted system tool.
 
 use std::ffi::OsStr;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
@@ -17,34 +20,51 @@ pub struct CommandOutput {
     pub timed_out: bool,
 }
 
-struct Captured {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
-fn drain_bounded<R: Read>(mut reader: R, limit: usize) -> io::Result<Captured> {
-    let mut captured = Vec::with_capacity(limit.min(8192));
-    let mut scratch = [0_u8; 4096];
-    let mut truncated = false;
-    loop {
-        let n = reader.read(&mut scratch)?;
-        if n == 0 {
-            break;
+// System administrators, the loader, and system libraries remain trusted.
+// Holding the checked ELF open prevents pathname replacement from selecting a
+// different inode at exec. This is not containment of a malicious executable.
+fn checked_executable(path: &Path) -> io::Result<File> {
+    let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "untrusted diagnostic tool");
+    // Resolve distro directory aliases, then require every resolved ancestor
+    // (including /) to be a root-owned directory without non-root write bits.
+    for parent in path.ancestors().skip(1) {
+        let resolved = std::fs::canonicalize(parent)?;
+        for ancestor in resolved.ancestors() {
+            let m = std::fs::symlink_metadata(ancestor)?;
+            if !m.is_dir() || m.uid() != 0 || m.mode() & 0o022 != 0 {
+                return Err(denied());
+            }
         }
-        let room = limit.saturating_sub(captured.len());
-        captured.extend_from_slice(&scratch[..n.min(room)]);
-        truncated |= n > room;
-        // Continue draining after the cap so a noisy child cannot block on a
-        // full pipe. Memory stays bounded by `limit` per stream.
     }
-    Ok(Captured {
-        bytes: captured,
-        truncated,
-    })
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    let m = file.metadata()?;
+    if !super::trusted_executable_metadata(m.uid(), m.mode(), m.is_file(), false) {
+        return Err(denied());
+    }
+    let caps = unsafe {
+        libc::fgetxattr(
+            file.as_raw_fd(),
+            c"security.capability".as_ptr(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if caps >= 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ENODATA) {
+        return Err(denied());
+    }
+    let mut magic = [0; 4];
+    file.read_exact(&mut magic)?;
+    if magic != *b"\x7fELF" {
+        return Err(denied());
+    }
+    Ok(file)
 }
 
-/// Run a fixed executable and argument vector with drained, capped output and
-/// a wall-clock deadline. No shell or inherited environment expansion is used.
+/// No shell, inherited loader variables, or caller-selected PATH. The checked
+/// descriptor stays open until spawn has executed the ELF through procfs.
 pub fn run_bounded<I, S>(
     executable: &Path,
     arguments: I,
@@ -61,8 +81,13 @@ where
             "invalid bounded command configuration",
         ));
     }
-    let mut child = Command::new(executable)
+    let file = checked_executable(executable)?;
+    let mut child = Command::new(format!("/proc/self/fd/{}", file.as_raw_fd()))
         .args(arguments)
+        .env_clear()
+        .env("PATH", "/usr/bin:/usr/sbin")
+        .env("LC_ALL", "C")
+        .current_dir("/")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -70,76 +95,107 @@ where
     collect_child(&mut child, timeout, output_limit_per_stream)
 }
 
-fn collect_child(
-    child: &mut Child,
-    timeout: Duration,
-    output_limit_per_stream: usize,
-) -> io::Result<CommandOutput> {
-    let stdout = child
+fn nonblocking(fd: i32) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn read_available(
+    reader: &mut impl Read,
+    bytes: &mut Vec<u8>,
+    limit: usize,
+    truncated: &mut bool,
+) -> io::Result<bool> {
+    let mut scratch = [0; 4096];
+    // Bound work per tick as well as retained memory so an endless writer
+    // cannot prevent the deadline from being checked.
+    for _ in 0..16 {
+        match reader.read(&mut scratch) {
+            Ok(0) => return Ok(true),
+            Ok(n) => {
+                let room = limit.saturating_sub(bytes.len());
+                bytes.extend_from_slice(&scratch[..n.min(room)]);
+                *truncated |= n > room;
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
+}
+
+fn collect_child(child: &mut Child, timeout: Duration, limit: usize) -> io::Result<CommandOutput> {
+    let result = collect_pipes(child, timeout, limit);
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.try_wait();
+    }
+    result
+}
+
+fn collect_pipes(child: &mut Child, timeout: Duration, limit: usize) -> io::Result<CommandOutput> {
+    let mut out = child
         .stdout
         .take()
-        .ok_or_else(|| io::Error::other("stdout pipe unavailable"))?;
-    let stderr = child
+        .ok_or_else(|| io::Error::other("stdout unavailable"))?;
+    let mut err = child
         .stderr
         .take()
-        .ok_or_else(|| io::Error::other("stderr pipe unavailable"))?;
-    let stdout_reader = thread::spawn(move || drain_bounded(stdout, output_limit_per_stream));
-    let stderr_reader = thread::spawn(move || drain_bounded(stderr, output_limit_per_stream));
-
+        .ok_or_else(|| io::Error::other("stderr unavailable"))?;
+    nonblocking(out.as_raw_fd())?;
+    nonblocking(err.as_raw_fd())?;
     let deadline = Instant::now() + timeout;
-    let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+    let mut status = None;
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let (mut stdout_truncated, mut stderr_truncated) = (false, false);
+    loop {
+        let out_done = read_available(&mut out, &mut stdout, limit, &mut stdout_truncated)?;
+        let err_done = read_available(&mut err, &mut stderr, limit, &mut stderr_truncated)?;
+        if status.is_none() {
+            status = child.try_wait()?;
+        }
+        if out_done && err_done {
+            if let Some(status) = status {
+                return Ok(CommandOutput {
+                    status,
+                    stdout,
+                    _stderr: stderr,
+                    stdout_truncated,
+                    stderr_truncated,
+                    timed_out: false,
+                });
+            }
         }
         if Instant::now() >= deadline {
-            timed_out = true;
+            // Close both pipes on return, including when a descendant holds
+            // them open. No detached reader threads survive this call.
             let _ = child.kill();
-            let stop_deadline = Instant::now() + Duration::from_secs(2);
-            loop {
-                if child.try_wait()?.is_some() {
-                    break;
-                }
-                if Instant::now() >= stop_deadline {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "child termination unknown",
-                    ));
-                }
+            let stop = Instant::now() + Duration::from_secs(2);
+            while status.is_none() && Instant::now() < stop {
+                status = child.try_wait()?;
                 thread::sleep(Duration::from_millis(10));
             }
-            break child
-                .try_wait()?
-                .ok_or_else(|| io::Error::other("child status unavailable"))?;
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    let relay_deadline = Instant::now() + Duration::from_secs(2);
-    while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
-        if Instant::now() >= relay_deadline {
-            // A descendant may hold a pipe open. Detached readers retain only
-            // bounded buffers; never turn leader exit into probe success.
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "output relay incomplete",
-            ));
+            return match status {
+                Some(status) => Ok(CommandOutput {
+                    status,
+                    stdout,
+                    _stderr: stderr,
+                    stdout_truncated,
+                    stderr_truncated,
+                    timed_out: true,
+                }),
+                None => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "child termination unknown",
+                )),
+            };
         }
         thread::sleep(Duration::from_millis(10));
     }
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| io::Error::other("stdout reader failed to join"))??;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| io::Error::other("stderr reader failed to join"))??;
-    Ok(CommandOutput {
-        status,
-        stdout: stdout.bytes,
-        _stderr: stderr.bytes,
-        stdout_truncated: stdout.truncated,
-        stderr_truncated: stderr.truncated,
-        timed_out,
-    })
 }
 
 #[cfg(test)]
@@ -162,6 +218,14 @@ mod tests {
                         .parse()
                         .unwrap(),
                 );
+            }
+            Ok("descendant") => {
+                fixture_command("hold").spawn().unwrap();
+                std::process::exit(0);
+            }
+            Ok("hold") => {
+                thread::sleep(Duration::from_secs(1));
+                std::process::exit(0);
             }
             Ok("nonzero") => std::process::exit(7),
             Ok("flood") => {
@@ -268,7 +332,7 @@ mod tests {
         cases.push((untested, 0, Some(false)));
         for (json, code, expected) in cases {
             let mut output = run_bounded(
-                Path::new("/bin/sh"),
+                Path::new("/usr/bin/dash"),
                 [
                     "-c",
                     r#"printf '%s' "$1"; exit "$2""#,
@@ -298,7 +362,7 @@ mod tests {
             assert!(crate::airdrop::doctor_ready(&output).is_err());
         }
         let mut output = run_bounded(
-            Path::new("/bin/sh"),
+            Path::new("/usr/bin/dash"),
             ["-c", "printf '%s' '{\"station\":null,\"station\":null}'"],
             Duration::from_secs(2),
             65536,
@@ -307,6 +371,39 @@ mod tests {
         assert!(crate::airdrop::doctor_ready(&output).is_err());
         output.stdout = b"{\"station\":null,\"sta\\u0074ion\":null}".to_vec();
         assert!(crate::airdrop::doctor_ready(&output).is_err());
+    }
+
+    #[test]
+    fn descendant_pipes_do_not_extend_deadline() {
+        let mut child = fixture_command("descendant")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let output = collect_child(&mut child, Duration::from_millis(100), 128).unwrap();
+        assert!(output.timed_out);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn caller_environment_is_not_inherited() {
+        let output = run_bounded(
+            Path::new("/usr/bin/dash"),
+            [
+                "-c",
+                "test -z \"$HOME$LD_PRELOAD$DBUS_SYSTEM_BUS_ADDRESS\" && test \"$LC_ALL\" = C",
+            ],
+            Duration::from_secs(2),
+            128,
+        )
+        .unwrap();
+        assert!(output.status.success());
+    }
+
+    #[test]
+    fn writable_parent_is_rejected() {
+        assert!(checked_executable(Path::new("/tmp/nonexistent-diagnostic")).is_err());
     }
 
     #[test]

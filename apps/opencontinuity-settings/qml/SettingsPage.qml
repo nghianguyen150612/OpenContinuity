@@ -172,7 +172,7 @@ ScrollView {
             status: airdropStatus.state
             detail: airdropStatus.lastError.length > 0
                     ? airdropStatus.lastError
-                    : "This check reads local Wi-Fi and Owly status only. It does not scan, start AWDL, change the radio, or contact nearby Apple devices."
+                    : "This check reads local Wi-Fi/AWDL observations only. Live Owly probing is unavailable. It does not scan, start AWDL, change the radio, or contact nearby Apple devices."
         }
         ColumnLayout {
             visible: page.pageIndex === 3

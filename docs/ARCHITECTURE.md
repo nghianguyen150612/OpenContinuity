@@ -151,11 +151,12 @@ review, and validation report. Physical W0–W6 remain NOT RUN/BLOCKED.
 
 ## P019I read-only AirDrop diagnostics
 
-`opencontinuity_core::airdrop` contains only the report types used for local
-diagnostics. The Linux CLI reads sysfs/procfs, invokes fixed read-only `iw`
-probes, and accepts Owly status only from a root-owned, non-writable executable
-at a fixed system path and exact version 0.4.2. The doctor JSON parser rejects
-unknown fields and invalid states; subprocess time and memory are bounded.
-Qt Settings invokes only `airdrop doctor --json` on manual refresh and validates
-the report before displaying local status. No Receive executable path or
+`opencontinuity_core::airdrop` contains only local report types. The Linux CLI
+reads sysfs/procfs and invokes fixed read-only `iw` queries with sanitized
+arguments and environment. It checks root ownership, parent directories, setid
+bits, file capabilities and ELF format, then executes the held descriptor.
+Live Owly probing is disabled because its D-Bus call can activate `owlyd`, whose
+startup recovers the radio journal. The pinned 0.4.2 parser is retained only
+for offline regression tests. Qt invokes `airdrop doctor --json` on manual
+refresh, validates the result, and keeps Receive disabled. No Receive or
 publication code is included. See [P019I scope](research/P019I_READ_ONLY_AIRDROP.md).

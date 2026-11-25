@@ -5,9 +5,9 @@ use opencontinuity_core::airdrop::BlockReason;
 use opencontinuity_core::airdrop::{AirDropReport, BackendState, PlaneState};
 #[cfg(target_os = "linux")]
 use opencontinuity_core::airdrop::{ObservationSource, RadioReport};
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 use serde_json::Value;
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 use std::collections::HashSet;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
@@ -18,11 +18,6 @@ use std::time::Duration;
 #[cfg(target_os = "linux")]
 #[path = "airdrop_process.rs"]
 mod process;
-
-#[cfg(target_os = "linux")]
-const OWLY_VERSION: &str = "0.4.2";
-#[cfg(target_os = "linux")]
-const OWLY_DOCTOR_OUTPUT_LIMIT: usize = 64 * 1024;
 
 const USAGE: &str = "Usage:\n  opencontinuity airdrop doctor [--json]\n  opencontinuity airdrop backend status [--json]\n  Doctor/status are read-only. This build does not implement file receiving. OpenContinuity never activates AWDL or changes radio configuration.";
 
@@ -72,69 +67,10 @@ fn probe() -> AirDropReport {
     report.advertisement = PlaneState::Unknown;
     report.block_reason = Some(BlockReason::BackendNotInstalled);
 
-    let Some(executable) = backend_path_or_missing(&mut report, find_fixed_executable("owly"))
-    else {
-        return report;
-    };
-    let version = process::run_bounded(&executable, ["--version"], Duration::from_secs(2), 4096);
-    let Ok(version) = version else {
-        report.block_reason = Some(BlockReason::BackendProbeFailed);
-        return report;
-    };
-    if version.timed_out
-        || version.stdout_truncated
-        || version.stderr_truncated
-        || !version.status.success()
-    {
-        report.block_reason = Some(BlockReason::BackendProbeFailed);
-        return report;
-    }
-    let version_line = String::from_utf8_lossy(&version.stdout).trim().to_owned();
-    let Some(actual_version) = version_line.strip_prefix("owly ") else {
-        report.block_reason = Some(BlockReason::BackendVersionUnsupported);
-        return report;
-    };
-    if !supported_owly_version(actual_version) {
-        report.block_reason = Some(BlockReason::BackendVersionUnsupported);
-        report.backend = BackendState::Unknown;
-        return report;
-    }
-    report.upstream_version = Some(OWLY_VERSION.to_owned());
-
-    let doctor = process::run_bounded(
-        &executable,
-        ["doctor", "--json"],
-        Duration::from_secs(3),
-        OWLY_DOCTOR_OUTPUT_LIMIT,
-    );
-    let Ok(doctor) = doctor else {
-        report.block_reason = Some(BlockReason::BackendProbeFailed);
-        return report;
-    };
-    let Ok(ready) = doctor_ready(&doctor) else {
-        report.block_reason = Some(BlockReason::BackendProbeFailed);
-        return report;
-    };
-    report.source = ObservationSource::OwlyDoctor;
-    if !ready {
-        report.backend = BackendState::Blocked;
-        report.control_plane = PlaneState::Blocked;
-        report.block_reason = Some(BlockReason::BackendProbeFailed);
-        return report;
-    }
-
-    report.control_plane = PlaneState::Ready;
-    apply_radio_status(&mut report);
-    // Owly's CLI has no machine-readable advertisement-ready or per-transfer
-    // progress API. Do not infer those states from process availability.
-    report.advertisement = PlaneState::Unknown;
-    report.live_airdrop_interoperability = BackendState::Unknown;
+    // Owly doctor uses an activating D-Bus call; daemon startup recovers the
+    // radio journal. Never execute it, even if Owly is installed and pinned.
+    backend_path_or_missing(&mut report, find_fixed_executable("owly"));
     report
-}
-
-#[cfg(target_os = "linux")]
-fn supported_owly_version(version: &str) -> bool {
-    version == OWLY_VERSION
 }
 
 #[cfg(target_os = "linux")]
@@ -146,29 +82,15 @@ fn backend_path_or_missing(
         report.backend = BackendState::Blocked;
         report.control_plane = PlaneState::Blocked;
         report.block_reason = Some(BlockReason::BackendNotInstalled);
+    } else {
+        report.backend = BackendState::Unsupported;
+        report.control_plane = PlaneState::Unsupported;
+        report.block_reason = Some(BlockReason::BackendProbeUnsupported);
     }
     executable
 }
 
-#[cfg(target_os = "linux")]
-fn apply_radio_status(report: &mut AirDropReport) {
-    if report.radio.awdl_interface_state == BackendState::Ready
-        && report.radio.awdl_link_local_address_present
-    {
-        report.backend = BackendState::Ready;
-        report.data_plane = PlaneState::Available;
-        report.block_reason = None;
-    } else {
-        report.backend = BackendState::Blocked;
-        report.data_plane = PlaneState::Blocked;
-        report.block_reason = Some(BlockReason::RadioNotPrepared);
-    }
-    // This build has no operational Receive path, even when diagnostics
-    // observe an already prepared interface.
-    report.receiver_available = false;
-}
-
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 fn has_duplicate_keys(bytes: &[u8]) -> bool {
     let mut objects: Vec<HashSet<String>> = Vec::new();
     let mut index = 0;
@@ -216,7 +138,7 @@ fn has_duplicate_keys(bytes: &[u8]) -> bool {
 }
 
 /// Owly 0.4.2 Capabilities/Card/ChannelUse at upstream 6f2e8ea.
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 fn doctor_ready(output: &process::CommandOutput) -> Result<bool, ()> {
     if output.timed_out
         || output.stdout_truncated
@@ -232,7 +154,7 @@ fn doctor_ready(output: &process::CommandOutput) -> Result<bool, ()> {
     validate_doctor(&json)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 fn validate_doctor(json: &Value) -> Result<bool, ()> {
     let object = json.as_object().ok_or(())?;
     if object.len() != 10
@@ -480,7 +402,11 @@ fn inspect_iw(interface: &str, path: &Path, radio: &mut RadioReport) {
         8192,
     );
     if let Ok(link) = link {
-        if !link.timed_out && !link.stdout_truncated && link.status.success() {
+        if !link.timed_out
+            && !link.stdout_truncated
+            && !link.stderr_truncated
+            && link.status.success()
+        {
             let output = String::from_utf8_lossy(&link.stdout);
             radio.associated = if output.contains("Not connected.") {
                 Some(false)
@@ -501,7 +427,8 @@ fn inspect_iw(interface: &str, path: &Path, radio: &mut RadioReport) {
     }
     let reg = process::run_bounded(&iw, ["reg", "get"], Duration::from_secs(1), 8192);
     if let Ok(reg) = reg {
-        if !reg.timed_out && !reg.stdout_truncated && reg.status.success() {
+        if !reg.timed_out && !reg.stdout_truncated && !reg.stderr_truncated && reg.status.success()
+        {
             radio.regulatory_domain = String::from_utf8_lossy(&reg.stdout)
                 .lines()
                 .find_map(|line| line.trim().strip_prefix("country "))
@@ -521,7 +448,11 @@ fn inspect_iw(interface: &str, path: &Path, radio: &mut RadioReport) {
             32 * 1024,
         );
         if let Ok(info) = info {
-            if !info.timed_out && !info.stdout_truncated && info.status.success() {
+            if !info.timed_out
+                && !info.stdout_truncated
+                && !info.stderr_truncated
+                && info.status.success()
+            {
                 let output = String::from_utf8_lossy(&info.stdout);
                 radio.monitor_mode = if output.lines().any(|line| line.trim() == "* monitor") {
                     BackendState::Available
@@ -654,15 +585,29 @@ mod diagnostic_tests {
     }
 
     #[test]
+    fn installed_backend_is_unsupported_without_executing_doctor() {
+        let mut report = AirDropReport::unknown();
+        backend_path_or_missing(&mut report, Some(PathBuf::from("/not/executed/owly")));
+        assert_eq!(report.backend, BackendState::Unsupported);
+        assert_eq!(report.control_plane, PlaneState::Unsupported);
+        assert_eq!(
+            report.block_reason,
+            Some(BlockReason::BackendProbeUnsupported)
+        );
+        assert_eq!(report.upstream_version, None);
+        assert!(!report.receiver_available);
+    }
+
+    #[test]
     fn unsupported_radio_is_reported_as_blocked() {
         let mut report = AirDropReport::unknown();
         report.backend = BackendState::Ready;
         report.radio.state = BackendState::Unsupported;
         report.radio.awdl_interface_state = BackendState::Unsupported;
-        apply_radio_status(&mut report);
+        backend_path_or_missing(&mut report, None);
         assert_eq!(report.backend, BackendState::Blocked);
-        assert_eq!(report.data_plane, PlaneState::Blocked);
-        assert_eq!(report.block_reason, Some(BlockReason::RadioNotPrepared));
+        assert_eq!(report.data_plane, PlaneState::Unknown);
+        assert_eq!(report.block_reason, Some(BlockReason::BackendNotInstalled));
         assert!(!report.receiver_available);
     }
 
@@ -671,8 +616,8 @@ mod diagnostic_tests {
         let mut report = AirDropReport::unknown();
         report.radio.awdl_interface_state = BackendState::Ready;
         report.radio.awdl_link_local_address_present = true;
-        apply_radio_status(&mut report);
-        assert_eq!(report.backend, BackendState::Ready);
+        backend_path_or_missing(&mut report, Some(PathBuf::from("/not/executed/owly")));
+        assert_eq!(report.backend, BackendState::Unsupported);
         assert!(!report.receiver_available);
         assert_eq!(report.live_airdrop_interoperability, BackendState::Unknown);
         assert_eq!(report.authorization, "never_evaluated");

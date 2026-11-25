@@ -69,7 +69,8 @@ std::optional<AirdropStatusReport> AirdropStatusReport::parse(
   const auto reason = root.value("blockReason");
   static const QStringList reasons{
       "backend_not_installed", "backend_version_unsupported",
-      "radio_not_prepared", "radio_state_unknown", "backend_probe_failed"};
+      "radio_not_prepared", "radio_state_unknown", "backend_probe_failed",
+      "backend_probe_unsupported"};
   if (!reason.isNull() && !oneOf(reason, reasons))
     return std::nullopt;
 

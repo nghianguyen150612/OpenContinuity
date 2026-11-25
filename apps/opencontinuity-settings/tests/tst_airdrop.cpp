@@ -32,6 +32,19 @@ private slots:
     QCOMPARE(report->blockReason, "radio_not_prepared");
   }
 
+  void disabledLiveProbeHasExplicitUnsupportedState() {
+    auto root = QJsonDocument::fromJson(validStatus()).object();
+    root.insert("source", "local_sysfs");
+    root.insert("backend", "unsupported");
+    root.insert("controlPlane", "unsupported");
+    root.insert("blockReason", "backend_probe_unsupported");
+    root.insert("upstreamVersion", QJsonValue(QJsonValue::Null));
+    const auto report = AirdropStatusReport::parse(QJsonDocument(root).toJson());
+    QVERIFY(report);
+    QCOMPARE(report->backend, "unsupported");
+    QVERIFY(!report->receiverAvailable);
+  }
+
   void receiveCannotBeEnabledByDiagnosticReadiness() {
     auto root = QJsonDocument::fromJson(validStatus()).object();
     auto radio = root.value("radio").toObject();

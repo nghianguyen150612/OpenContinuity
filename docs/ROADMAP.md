@@ -138,8 +138,8 @@ remain NOT RUN/BLOCKED, P010 and native Auto Unlock remain NO-GO, and
 
 ## P019I — Read-only AirDrop/AWDL diagnostic foundation
 
-P019I extracts only Linux Wi-Fi/AWDL diagnostics, strict pinned Owly 0.4.2
-doctor parsing, and a native Qt Settings status display. Missing or unsupported
+P019I extracts only Linux Wi-Fi/AWDL diagnostics, offline strict pinned Owly 0.4.2
+doctor parser tests (live probing disabled), and a native Qt Settings status display. Missing or unsupported
 hardware/backend states remain explicit. The diagnostic launches no Owly
 service and never changes radio configuration. File receiving is absent from
 this branch; Settings Receive is disabled. Mock tests cover schema rejection,

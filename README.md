@@ -10,7 +10,7 @@ OpenContinuity is an open-source effort to build native Apple ecosystem interope
 
 ## P001 status
 
-The CLI and idle foreground daemon are usable. P019I adds read-only Linux Wi-Fi/AWDL diagnostics and a native Qt Settings status display. AirDrop file transfer and physical interoperability remain unsupported or unqualified. Watch Auto Unlock and AirPods configuration remain unsupported. P008/P009 add separate signed Watch research protocols, not Apple Auto Unlock, and do not authorize Linux. Physical BLE, AirDrop and LocalAuthentication validation remain unrun. The static doctor does not scan; `airdrop doctor` only reads local radio state and a strictly pinned Owly diagnostic report. See [Feature Matrix](docs/FEATURE_MATRIX.md) and [Roadmap](docs/ROADMAP.md).
+The CLI and idle foreground daemon are usable. P019I adds read-only Linux Wi-Fi/AWDL diagnostics and a native Qt Settings status display. AirDrop file transfer and physical interoperability remain unsupported or unqualified. Watch Auto Unlock and AirPods configuration remain unsupported. P008/P009 add separate signed Watch research protocols, not Apple Auto Unlock, and do not authorize Linux. Physical BLE, AirDrop and LocalAuthentication validation remain unrun. The static doctor does not scan; `airdrop doctor` only reads local radio state and read-only system queries; live Owly probing is disabled because D-Bus activation can trigger radio recovery. See [Feature Matrix](docs/FEATURE_MATRIX.md) and [Roadmap](docs/ROADMAP.md).
 
 ## Build and run
 
@@ -32,7 +32,7 @@ cargo run -p opencontinuityd -- --help
 cargo run -p opencontinuityd
 ```
 
-The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. Research fixture commands are offline and always report `authorization: never_evaluated`. Watch GATT and signed transport remain separate experimental flows; physical signed BLE remains unverified. `airdrop doctor --json` performs bounded read-only host probes and, when present, invokes only the pinned Owly 0.4.2 `doctor --json` command. It never starts the Owly service, activates AWDL or modifies radio configuration. The `airdrop receive` command is unavailable in this build, and Qt Receive remains disabled. See [P019I read-only scope](docs/research/P019I_READ_ONLY_AIRDROP.md).
+The daemon runs in the foreground in a safe idle state and exits on Ctrl-C or SIGTERM. Research fixture commands are offline and always report `authorization: never_evaluated`. Watch GATT and signed transport remain separate experimental flows; physical signed BLE remains unverified. `airdrop doctor --json` performs bounded read-only host probes and never executes Owly: its D-Bus call could activate a daemon that recovers radio state. It never starts the Owly service, activates AWDL or modifies radio configuration. The `airdrop receive` command is unavailable in this build, and Qt Receive remains disabled. See [P019I read-only scope](docs/research/P019I_READ_ONLY_AIRDROP.md).
 
 ## Architecture
 

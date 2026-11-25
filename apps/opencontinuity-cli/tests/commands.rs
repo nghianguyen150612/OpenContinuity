@@ -38,7 +38,7 @@ fn receive_command_is_unavailable_without_backend_staging_or_publication() {
     let fake_owly = path.join("owly");
     std::fs::write(
         &fake_owly,
-        format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+        format!("#!/bin/sh\nprintf started > '{}'\n", marker.display()),
     )
     .unwrap();
     std::fs::set_permissions(&fake_owly, std::fs::Permissions::from_mode(0o755)).unwrap();

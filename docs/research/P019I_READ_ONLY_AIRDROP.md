@@ -1,65 +1,80 @@
 # P019I — Read-only AirDrop/AWDL diagnostics
 
-## Scope
+## Implemented scope
 
-This extraction is based on `main` and contains only the local diagnostic path,
-its report schema, a manually refreshed native Qt Settings display, and related
-regressions. The CLI exposes `airdrop doctor [--json]` and the alias
-`airdrop backend status [--json]`. The diagnostic reports local Wi-Fi and
-AWDL-interface observations, then (when installed at an approved system path)
-checks the exact Owly `0.4.2` version and parses its doctor report. A fixed
-argument vector, a 2-second version deadline, a 3-second doctor deadline, and
-bounded output are used. Missing binaries, unsupported platforms, malformed
-reports, unexpected process exits, timeouts, and output overflow do not become
-success.
+`airdrop doctor [--json]` and `airdrop backend status [--json]` read Linux
+sysfs/procfs and optional fixed-path `iw` queries: `dev <interface> link`,
+`reg get`, and `phy <phy> info`. These are query operations and do not scan,
+configure channels/regulatory state, activate AWDL, request privilege, write
+transfer files, or change PAM/login/unlock settings. Missing tools and hardware
+remain unavailable/unknown. Non-Linux reports are explicitly unsupported.
+Qt refresh is manual; Receive is disabled. CLI Receive routing, staging,
+publication, containment, quota, manager and guardian implementations are absent.
 
-The Qt Settings page refreshes only after an explicit click. It displays local
-radio/backend states and the invariant qualification fields. The Receive button
-is disabled, and the command is absent from this branch. No backend launcher,
-receive coordinator, quota manager, guardian, staging code, or publication path
-is included. A local `ready` state means only that the corresponding local
-checks passed; it does not establish advertisement, Apple identity, AirDrop
-interoperability, or transfer support.
+## R1 side-effect correction
 
-## Actual diagnostic side effects reviewed
+Reviewed Owly version 0.4.2 at upstream commit
+[`6f2e8ea99aed0687558d78a1dd49154ab3a5fa76`](https://github.com/t4t5/owly/tree/6f2e8ea99aed0687558d78a1dd49154ab3a5fa76).
+`crates/owly-cli/src/doctor.rs::report` first connects to the system bus,
+builds `RadioProxy`, and invokes `Probe`. `crates/owlyd/src/api.rs::radio`
+disables property caching, but does not disable service activation. Packaged
+`packaging/io.github.t4t5.Owly.service` specifies fallback `Exec=/bin/false` and
+`SystemdService=owlyd.service` (the unit runs `owlyd`). D-Bus can therefore activate the daemon before
+answering a diagnostic call. `crates/owlyd/src/service.rs::serve` invokes
+`backend.recover()` before serving; injection recovery can undo journalled radio
+changes. The earlier claim that doctor only contacts an already-running daemon
+was incorrect.
 
-Owly is pinned to upstream commit
-[`6f2e8ea99aed0687558d78a1dd49154ab3a5fa76`](https://github.com/t4t5/owly/tree/6f2e8ea99aed0687558d78a1dd49154ab3a5fa76), version 0.4.2. Source inspection covered `owly-cli/src/doctor.rs`,
-`owly-radio/src/probe.rs`, `owly-radio/src/injection/mod.rs`, and the daemon's
-`Probe` D-Bus method. The CLI doctor connects to an already-running `owlyd` and
-asks it for `Probe`; if unavailable, it loads `/etc/owly/radio.toml` and probes
-through read-only sysfs/nl80211/firewall configuration observations. Owly's
-probe implementation documents that it needs no root and changes nothing.
-Neither path calls `radio up`, acquires a radio lease, sets channel or
-regulatory-domain state, creates an interface, edits firewall rules, activates
-AWDL, starts `owlyd`, or runs `modprobe`. P019I never launches the daemon.
-Owly daemon startup has a separate recovery path that can undo a prior radio
-journal; the diagnostic does not start the daemon and does not invoke that path.
+The `Probe` handler itself calls the capability prober; fallback configuration
+reads `/etc/owly/radio.toml`, sysfs/nl80211 and `/etc/ufw/ufw.conf` through
+`owly-radio/src/probe.rs`, `injection/mod.rs`, and `sys.rs`. These probe paths
+read configuration/capabilities rather than invoke interface, channel, regulatory
+or firewall mutators. That does not make the complete activating CLI safe.
+**Live Owly execution is disabled unconditionally**, including version execution.
+A detected trusted-path installation reports `backend_probe_unsupported`; no
+backend version or control-plane readiness is claimed. Strict 0.4.2 schema and
+duplicate-key parsing remains in offline tests only. No bypass is provided.
 
-OpenContinuity's Linux path reads `/sys/class/net`, `/proc/net/if_inet6`,
-`/proc/sys/kernel/osrelease`, `/proc/self/status`, and limited sysfs device
-metadata. Optional fixed-path `iw` calls are `dev <interface> link`, `reg get`,
-and `phy <phy> info`; each is a read-only query. The CLI never asks for root,
-uses a shell, changes network configuration, or searches `PATH` for Owly/iw.
-A system-installed Owly binary is accepted only when it is a regular,
-root-owned, non-writable, non-setuid/non-setgid executable at `/usr/bin/owly`
-or `/usr/local/bin/owly`, and its version is exactly 0.4.2.
+## Executable and deadline assumptions
 
-The reviewed Owly workspace and the `owly-airdrop`/`owly-radio` manifests
-identify MIT licensing; its nested kernel-derived `omdrop-awdl` component is
-GPL-2.0-only. P019I copies no upstream implementation and adds no Owly
-library/source dependency. GPL-only OWL/OpenDrop implementations are not copied
-or linked into this project.
+`iw` candidates are fixed paths, with a regular non-symlink final component.
+Every resolved parent is root-owned and not group/other writable. The runner
+reopens with `O_NOFOLLOW`, verifies root ownership, executable bits, absence of
+setuid/setgid and file capabilities, and ELF format. It holds the file open and
+executes `/proc/self/fd/<fd>`, preventing pathname replacement from selecting a
+different inode after verification. The process environment is cleared; only
+fixed PATH and C locale are supplied. The working directory is `/`.
 
-## Evidence categories
+System administrators, the existing host process, dynamic loader, system
+libraries and kernel are trusted. Root can modify a file in place or system
+libraries; these checks do not authenticate package provenance or provide
+malicious-process containment. Existing ACL grants are reflected in the group
+mode mask. Unreadable capability metadata fails closed. No privilege is added.
 
-| Category | P019I status |
+Each query has a one-second execution/pipe deadline with up to two seconds for
+leader termination. Nonblocking readers cap both retained bytes and work per
+tick, drain both streams, reject truncation, and close descriptors on timeout.
+Descendants cannot extend the return deadline or leave reader threads alive;
+this is not a guarantee of terminating arbitrary descendants. Three queries
+fit within Qt's ten-second normal diagnostic budget (at most roughly nine
+seconds including termination allowances). Qt timeout/cancel kills its CLI,
+fences stale callbacks, and accepts no partial result. Host scheduling and
+uninterruptible kernel tasks cannot be given a hard real-time guarantee.
+
+## Licensing and evidence categories
+
+Owly workspace, CLI, radio and AirDrop crates declare MIT; nested
+`crates/omdrop-owl/omdrop-awdl/LICENSE` declares GPL-2.0-only. No upstream
+implementation is copied or linked, and no Owly dependency is added. Linux
+uses existing libc; no new dependency is introduced. Rust CI uses 1.85.
+
+| Category | Status |
 | --- | --- |
-| Implemented diagnostics | Fixed-path local Wi-Fi/AWDL reads, bounded `iw` and Owly doctor subprocesses, exact Owly version pin, strict schema validation, Qt manual status display |
-| Mock-tested behavior | Missing/unsupported state mapping, malformed and unknown doctor fields, duplicate keys, invalid status, nonzero process exit, timeout, bounded output, Settings process/report validation, disabled Receive control |
-| Host-observed behavior | Local results are diagnostic observations only; see `docs/P019I_VALIDATION.md` for the exact runner result and CI evidence |
-| Physical AWDL interoperability | NOT RUN; RTL8852BE / iPhone 13 AirDrop remains NOT RUN |
-| Receive production qualification | Not implemented in this extraction; no file can be staged or published |
+| Implemented | Local sysfs/procfs reads, bounded optional iw queries, Qt manual display |
+| Mock-tested | Strict pinned offline doctor parser, missing/unsupported reports, exit/output/deadline checks, descendant pipes, disabled Receive |
+| Host-observed | Runner-specific software evidence only; see validation document |
+| Physical AWDL | RTL8852BE / iPhone 13 AirDrop: NOT RUN |
+| Receive production qualification | Not implemented; no staging or publication |
 
 `authorization: never_evaluated`
 
