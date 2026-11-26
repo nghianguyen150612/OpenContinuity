@@ -147,3 +147,16 @@ Watch or prove a radio exchange. The offline P018 checker validates the host and
 Watch exports independently and together without D-Bus, network or BLE access.
 Its output always leaves hardware unqualified. See the P018 schema, privacy
 review, and validation report. Physical W0–W6 remain NOT RUN/BLOCKED.
+
+
+## P019I read-only AirDrop diagnostics
+
+`opencontinuity_core::airdrop` contains only local report types. The Linux CLI
+reads sysfs/procfs and invokes fixed read-only `iw` queries with sanitized
+arguments and environment. It checks root ownership, parent directories, setid
+bits, file capabilities and ELF format, then executes the held descriptor.
+Live Owly probing is disabled because its D-Bus call can activate `owlyd`, whose
+startup recovers the radio journal. The pinned 0.4.2 parser is retained only
+for offline regression tests. Qt invokes `airdrop doctor --json` on manual
+refresh, validates the result, and keeps Receive disabled. No Receive or
+publication code is included. See [P019I scope](research/P019I_READ_ONLY_AIRDROP.md).

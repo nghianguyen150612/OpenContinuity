@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod airdrop;
 pub mod bluez_research;
 pub mod gatt_wire;
 pub mod research;
@@ -82,10 +83,8 @@ impl DoctorReport {
                 },
                 Capability {
                     id: "airdrop".into(),
-                    state: CapabilityState::Unsupported,
-                    summary:
-                        "Native AWDL/AirDrop interoperability is not implemented in this build."
-                            .into(),
+                    state: CapabilityState::Experimental,
+                    summary: "Read-only Linux Wi-Fi/AWDL diagnostics are available; AirDrop transfer is unsupported and physical interoperability is not qualified.".into(),
                 },
                 Capability {
                     id: "airpods_settings".into(),

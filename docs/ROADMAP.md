@@ -134,3 +134,15 @@ and [validation](P018_VALIDATION.md). Software tests and fake BlueZ checks do
 not qualify physical Arch RF, native Wayland or signed Watch SE 2 behavior. W0–W6
 remain NOT RUN/BLOCKED, P010 and native Auto Unlock remain NO-GO, and
 `authorization: never_evaluated`.
+
+
+## P019I — Read-only AirDrop/AWDL diagnostic foundation
+
+P019I extracts only Linux Wi-Fi/AWDL diagnostics, offline strict pinned Owly 0.4.2
+doctor parser tests (live probing disabled), and a native Qt Settings status display. Missing or unsupported
+hardware/backend states remain explicit. The diagnostic launches no Owly
+service and never changes radio configuration. File receiving is absent from
+this branch; Settings Receive is disabled. Mock tests cover schema rejection,
+process bounds, honest unavailable states, and the disabled UI. No physical
+AWDL interoperability or Receive production qualification is claimed. See
+[P019I scope and evidence](research/P019I_READ_ONLY_AIRDROP.md).

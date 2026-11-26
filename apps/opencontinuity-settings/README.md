@@ -21,6 +21,8 @@ smoke tests instead. CLI lookup defaults to `opencontinuity` in the Settings
 executable's own directory, never the current directory or PATH. `--cli` accepts
 one trusted absolute executable path; it receives only fixed `doctor --json` or
 `devices list --json`, or explicit `devices discover --seconds 10 --events-jsonl` arguments.
+The AirDrop page offers a manual, read-only Linux Wi-Fi/AWDL refresh. It calls only `airdrop doctor --json` through a bounded asynchronous process and validates the strict schema-v1 report. It does not scan for Apple devices, activate AWDL, change radio settings or start file receiving. The Receive control stays disabled, and diagnostics do not establish physical interoperability. See [P019I scope](../../docs/research/P019I_READ_ONLY_AIRDROP.md).
+
 A missing CLI still leaves every page navigable with an explanatory error.
 Doctor refresh is manual (Ctrl+R), asynchronous, limited to three seconds, and never
 performs Bluetooth discovery. Device snapshots are refreshed only by the
@@ -38,8 +40,7 @@ The launcher and original SVG icon install under `share/applications` and
 No services, authentication settings or compositor configuration are installed.
 
 See [build and troubleshooting](../../docs/research/P011_DESKTOP_BUILD_AND_TEST.md)
-for Arch/Hyprland, Ubuntu, Wayland/X11 plugins and manual checks. Native Watch
-Auto Unlock, AirDrop and AirPods protocols are unsupported. Device discovery is
+for Arch/Hyprland, Ubuntu, Wayland/X11 plugins and manual checks. Native Watch Auto Unlock and AirPods protocols are unsupported. AirDrop has read-only diagnostics only; transfer remains unavailable. Device discovery is
 explicit and bounded as described below. P007–P010 research is informational only;
 `authorization: never_evaluated`. P010 hardware qualification remains NO-GO.
 
